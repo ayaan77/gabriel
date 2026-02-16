@@ -2,6 +2,7 @@
 <html>
 
 <head>
+    <meta charset="UTF-8">
     <title>Gabriel — Enable Microphone</title>
     <style>
         body {
@@ -53,6 +54,11 @@
             opacity: 0.9;
         }
 
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
         .success {
             color: #4ade80;
             display: none;
@@ -65,36 +71,77 @@
             display: none;
             margin-top: 20px;
         }
+
+        .instruction-arrow {
+            font-size: 40px;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            animation: bounce 1s infinite;
+            display: none;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
     </style>
 </head>
 
 <body>
+    <div class="instruction-arrow" id="arrow">↖️</div>
     <div class="container">
         <h1>Enable Voice Input 🎤</h1>
-        <p>Chrome requires you to grant microphone permission in a tab first. You only need to do this once.</p>
+        <p>Chrome requires explicit permission. Click the button below, then <b>Allow</b> the browser prompt.</p>
         <button id="enableBtn">Allow Microphone Access</button>
-        <div id="successMsg" class="success">✅ Permission granted! You can close this tab and use voice in the
-            extension.</div>
+        <p id="status" style="font-size: 12px; margin-top: 15px; color: #888; display: none;">Check top-left of
+            browser...</p>
+        <div id="successMsg" class="success">✅ Permission granted! You can close this tab.</div>
         <div id="errorMsg" class="error">❌ Permission denied. Please check browser settings.</div>
     </div>
 
     <script>
-        document.getElementById('enableBtn').addEventListener('click', async () => {
-            try {
-                await navigator.mediaDevices.getUserMedia({ audio: true });
-                document.getElementById('successMsg').style.display = 'block';
-                document.getElementById('enableBtn').style.display = 'none';
+    document.getElementById('enableBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('enableBtn');
+      const status = document.getElementById('status');
+      const arrow = document.getElementById('arrow');
+      
+      btn.disabled = true;
+      btn.innerText = 'Requesting...';
+      status.style.display = 'block';
+      arrow.style.display = 'block';
 
-                // Notify extension popup if open (optional)
-                chrome.runtime.sendMessage({ type: 'PERMISSION_GRANTED' });
-
-                setTimeout(() => window.close(), 3000);
-            } catch (err) {
-                console.error(err);
-                document.getElementById('errorMsg').style.display = 'block';
-                document.getElementById('errorMsg').textContent = '❌ Error: ' + err.message;
-            }
-        });
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        document.getElementById('successMsg').style.display = 'block';
+        btn.style.display = 'none';
+        status.style.display = 'none';
+        arrow.style.display = 'none';
+        
+        // Notify extension context (optional but good practice)
+        if (chrome && chrome.runtime) {
+           chrome.runtime.sendMessage({ type: 'PERMISSION_GRANTED' }).catch(() => {}); 
+        }
+        
+        setTimeout(() => window.close(), 2000);
+      } catch (err) {
+        console.error(err);
+        document.getElementById('errorMsg').style.display = 'block';
+        document.getElementById('errorMsg').textContent = '❌ Error: ' + err.message;
+        btn.disabled = false;
+        btn.innerText = 'Try Again';
+        status.style.display = 'none';
+        arrow.style.display = 'none';
+      }
+    });
     </script>
 </body>
 
