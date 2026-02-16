@@ -208,6 +208,13 @@ export default function App() {
 
   const sendMessage = async (text, overrideMode = null) => {
     if (!text.trim() || loading) return;
+
+    // Guard: check API key
+    if (!apiKey || apiKey.trim() === '') {
+      setError('No API key found. Click ⚙️ Settings to enter your Groq key.');
+      return;
+    }
+
     const currentMode = overrideMode || mode;
     const userMsg = { role: 'user', content: text.trim() };
     const updated = [...messages, userMsg];
