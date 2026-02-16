@@ -16,6 +16,8 @@ const Icons = {
   Code: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>,
   Copy: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
   Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>,
+  Mic: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg>,
+  MicOff: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" y1="2" x2="22" y2="22" /><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" /><path d="M5 10v2a7 7 0 0 0 12 5.12" /><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" /><path d="M9 9v3a3 3 0 0 0 5.12 2.12" /><line x1="12" y1="19" x2="12" y2="22" /></svg>,
 };
 
 // Render markdown-ish content with mermaid blocks
@@ -75,6 +77,92 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const micStreamRef = useRef(null);
+
+  const [permissionError, setPermissionError] = useState(false);
+
+  const toggleVoice = async () => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
+      setListening(false);
+      return;
+    }
+
+    // Step 1: Request mic permission (REQUIRED in Chrome extension popups)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream; // Keep stream alive
+      setPermissionError(false);
+    } catch (err) {
+      console.error('Mic permission error:', err);
+      // If permission denied/dismissed, show link to open permission page
+      setPermissionError(true);
+      setError('Microphone access needed. Click "Fix Permissions" to enable.');
+      return;
+    }
+
+    // Step 2: Start speech recognition
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError('Speech recognition not available. Use Chrome browser.');
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    let finalTranscript = input;
+
+    recognition.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTranscript += (finalTranscript ? ' ' : '') + e.results[i][0].transcript;
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+      setInput(finalTranscript + (interim ? ' ' + interim : ''));
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'permission-denied') {
+        setPermissionError(true);
+        setError('Microphone permission blocked. Click "Fix Permissions".');
+      } else if (e.error !== 'aborted') {
+        setError('Voice error: ' + e.error);
+      }
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      setListening(false);
+    };
+
+    recognition.onend = () => {
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
+      setListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      setListening(true);
+    } catch (err) {
+      setError('Could not start voice recognition: ' + err.message);
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+    }
+  };
+
+  const openPermissionPage = () => {
+    chrome.tabs.create({ url: 'permission.html' });
+    setPermissionError(false);
+    setError('');
+  };
 
   useEffect(() => {
     try {
@@ -119,19 +207,18 @@ export default function App() {
     // Check if it's a GitHub URL for analyze mode
     const ghMatch = text.match(/github\.com\/[^\/]+\/[^\/\s]+/);
     if (currentMode === 'analyze' && ghMatch) {
-      setAnalyzing(true);
-      setMessages(prev => [...prev, { role: 'assistant', content: '🔍 Fetching repository structure from GitHub...' }]);
       try {
+        setMessages([...updated, { role: 'assistant', content: '🔍 Fetching repository structure from GitHub...' }]);
         const repoData = await fetchGitHubRepo(text.trim());
-        const context = buildRepoContext(repoData);
-        const response = await chatWithAI([{ role: 'user', content: context }], apiKey, 'analyze');
-        setMessages([...updated, { role: 'assistant', content: response }]);
+        setMessages([...updated, { role: 'assistant', content: '📂 Got the repo! Analyzing architecture...' }]);
+        const response = await chatWithAI([{ role: 'user', content: buildRepoContext(repoData) }], apiKey, 'analyze');
+        const cleaned = response.replace('[ANALYSIS_COMPLETE]', '').trim();
+        setMessages([...updated, { role: 'assistant', content: cleaned }]);
       } catch (err) {
+        setMessages([...updated, { role: 'assistant', content: '❌ ' + (err.message || 'Failed to analyze repo. Make sure the URL is correct and the repo is public.') }]);
         setError(err.message);
-        setMessages(updated);
       } finally {
         setLoading(false);
-        setAnalyzing(false);
       }
       return;
     }
@@ -180,13 +267,50 @@ export default function App() {
     pdf.text('Gabriel — Architecture Spec', m, y + 8); y += 14;
     pdf.setDrawColor(...c.h); pdf.setLineWidth(0.5); pdf.line(m, y, pw - m, y); y += 8;
     const lines = content.split('\n');
+    let inMasterPrompt = false;
     for (const line of lines) {
+      // Master Prompt section — special styling
+      if (line.includes('Master Prompt') && line.startsWith('## ')) {
+        addPg(); // Always start on fresh page
+        inMasterPrompt = true;
+        // Gradient-style header bar
+        pdf.setFillColor(99, 102, 241); pdf.rect(m, y - 4, uw, 12, 'F');
+        pdf.setTextColor(255, 255, 255); pdf.setFontSize(14); pdf.setFont('helvetica', 'bold');
+        pdf.text('🤖  MASTER PROMPT — One-Shot Build Prompt', m + 4, y + 4);
+        y += 16;
+        pdf.setFillColor(15, 15, 35); pdf.rect(m, y, uw, 4, 'F'); // spacer
+        y += 6;
+        pdf.setTextColor(180, 180, 220); pdf.setFontSize(8); pdf.setFont('helvetica', 'italic');
+        pdf.text('Copy the prompt below and paste it into any AI coding agent to build this project.', m, y);
+        y += 8;
+        // Border start
+        pdf.setDrawColor(99, 102, 241); pdf.setLineWidth(0.5);
+        pdf.rect(m - 2, y - 2, uw + 4, 4, 'S'); // top border marker
+        y += 4;
+        continue;
+      }
+      if (line.startsWith('## ') && inMasterPrompt) { inMasterPrompt = false; }
+
+      if (inMasterPrompt) {
+        // Render master prompt text in monospace-feel, slightly smaller
+        if (!line.trim()) { y += 2; continue; }
+        if (line.startsWith('```')) { continue; }
+        chk(6);
+        const isBold = line.includes('**');
+        pdf.setTextColor(isBold ? 140 : 200, isBold ? 200 : 200, isBold ? 255 : 220);
+        pdf.setFontSize(8); pdf.setFont('courier', isBold ? 'bold' : 'normal');
+        const cl = line.replace(/\*\*/g, '').replace(/^#+\s*/, '');
+        const sl = pdf.splitTextToSize(cl, uw - 4);
+        sl.forEach(s => { chk(4.5); pdf.text(s, m + 2, y); y += 4; });
+        continue;
+      }
+
       if (line.startsWith('## ')) { chk(14); y += 6; pdf.setTextColor(...c.sh); pdf.setFontSize(13); pdf.setFont('helvetica', 'bold'); pdf.text(line.replace('## ', ''), m, y); y += 2; pdf.setDrawColor(...c.tb); pdf.setLineWidth(0.3); pdf.line(m, y + 1, pw - m, y + 1); y += 6; continue; }
       if (line.startsWith('### ')) { chk(12); y += 4; pdf.setTextColor(...c.h); pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.text(line.replace('### ', ''), m, y); y += 6; continue; }
       if (line.startsWith('|') && line.endsWith('|')) { const cells = line.split('|').filter(x => x.trim()).map(x => x.trim()); if (cells.every(x => /^[-:]+$/.test(x))) continue; chk(8); const isH = lines[lines.indexOf(line) + 1]?.includes('---'); const cw = uw / cells.length; pdf.setFillColor(...(isH ? c.th : c.tr)); pdf.setTextColor(isH ? 255 : c.t[0], isH ? 255 : c.t[1], isH ? 255 : c.t[2]); pdf.setFont('helvetica', isH ? 'bold' : 'normal'); pdf.rect(m, y - 4, uw, 7, 'F'); pdf.setFontSize(7); cells.forEach((cl, i) => { pdf.text(cl.length > 28 ? cl.substring(0, 26) + '..' : cl, m + i * cw + 2, y); }); y += 7; continue; }
       if (line.startsWith('- ') || line.startsWith('* ')) { chk(6); pdf.setTextColor(...c.t); pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); const sl = pdf.splitTextToSize('• ' + line.replace(/^[-*] /, ''), uw - 4); sl.forEach(s => { chk(5); pdf.text(s, m + 3, y); y += 4.5; }); continue; }
       if (!line.trim()) { y += 3; continue; }
-      if (line.startsWith('```')) { continue; } // skip code fences
+      if (line.startsWith('```')) { continue; }
       chk(6); pdf.setTextColor(...c.t); pdf.setFontSize(9); pdf.setFont('helvetica', line.includes('**') ? 'bold' : 'normal'); const cl = line.replace(/\*\*/g, ''); const sl = pdf.splitTextToSize(cl, uw); sl.forEach(s => { chk(5); pdf.text(s, m, y); y += 4.5; });
     }
     const tp = pdf.internal.getNumberOfPages();
@@ -297,7 +421,7 @@ export default function App() {
         ))}
 
         {/* Loading */}
-        {loading && !analyzing && (
+        {loading && (
           <div className="message assistant">
             <div className="message-avatar"><Icons.Wand /></div>
             <div className="message-bubble assistant">
@@ -328,6 +452,24 @@ export default function App() {
       {error && (
         <div className="error-banner">
           <Icons.AlertCircle /> {error}
+          {permissionError && (
+            <button
+              onClick={openPermissionPage}
+              style={{
+                marginLeft: '10px',
+                background: 'rgba(239, 68, 68, 0.2)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#ef4444',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                fontSize: '10px',
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              Fix Permissions
+            </button>
+          )}
           <button onClick={() => setError('')} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px' }}>✕</button>
         </div>
       )}
@@ -355,6 +497,13 @@ export default function App() {
             }
             disabled={loading}
           />
+          <button
+            className={`input-mic-btn ${listening ? 'listening' : ''}`}
+            onClick={toggleVoice}
+            title={listening ? 'Stop listening' : 'Voice input'}
+          >
+            {listening ? <Icons.MicOff /> : <Icons.Mic />}
+          </button>
           <button
             className={`input-send-btn ${input.trim() && !loading ? '' : 'inactive'}`}
             onClick={() => sendMessage(input)}

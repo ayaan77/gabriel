@@ -5,10 +5,12 @@
     "description": "Your AI Architect — intelligent architecture spec generator for developers.",
     "permissions": [
         "storage",
-        "activeTab"
+        "activeTab",
+        "offscreen"
     ],
     "host_permissions": [
-        "https://api.groq.com/*"
+        "https://api.groq.com/*",
+        "https://api.github.com/*"
     ],
     "action": {
         "default_popup": "index.html",

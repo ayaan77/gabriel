@@ -1,4 +1,4 @@
-export const DEFAULT_API_KEY = ""; // User enters their own Groq API key via Settings
+export const DEFAULT_API_KEY = ""; // User must enter key in Settings
 
 export const SYSTEM_PROMPT = `You are a Staff-level Software Architect with 15 years of experience
 building production systems at scale. You have deep expertise in system

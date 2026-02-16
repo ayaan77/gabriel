@@ -231,7 +231,27 @@ Deployment strategy, orchestration, environments, secrets, backup.
 | Service | 100 users/mo | 1k users/mo | 10k users/mo |
 
 ## The Hard Truth
-What the developer needs to hear.`;
+What the developer needs to hear.
+
+## 🤖 Master Prompt — One-Shot Build Prompt
+This is the most important section. Generate a COMPLETE, self-contained prompt that a developer can paste into ANY AI coding agent (like Antigravity, Cursor, Copilot, Claude, etc.) to build this ENTIRE project from scratch in one go.
+
+The prompt MUST include:
+1. **Project Overview** — What to build in 2-3 sentences
+2. **Tech Stack** — Exact technologies with versions (e.g., "Next.js 14 with App Router", "PostgreSQL 16", "Tailwind CSS v3.4")
+3. **Project Structure** — Complete folder/file tree to create
+4. **Database Schema** — Full SQL or schema definition with all tables, fields, types, constraints, relationships
+5. **API Routes** — Every endpoint with method, path, request/response format, auth requirements
+6. **Auth Setup** — Exact auth flow and provider configuration
+7. **Core Features** — Step-by-step what each feature does, with implementation details
+8. **Environment Variables** — Every .env variable needed with description
+9. **Third-Party Services** — API keys, services, SDKs to integrate and how
+10. **Deployment** — Exact deployment steps and configuration
+
+Format the Master Prompt as a ready-to-paste prompt that starts with:
+"Build me a [project type] with the following EXACT specifications. Follow these instructions precisely, do not deviate or simplify..."
+
+Make it so detailed that an AI agent needs ZERO follow-up questions. Every file, every endpoint, every schema field should be specified. This prompt should be 500-1000 words minimum.`;
 
 // ===== API FUNCTIONS =====
 
@@ -262,14 +282,14 @@ export async function chatWithAI(messages, apiKey, mode = 'architect') {
 export async function generateSpec(messages, apiKey) {
     const client = getClient(apiKey);
     const summary = messages
-        .map(m => `${m.role === 'user' ? 'Developer' : 'Architect'}: ${m.content}`)
+        .map(m => `${m.role === 'user' ? 'Developer' : 'Architect'}: ${m.content} `)
         .join('\n');
 
     try {
         const completion = await client.chat.completions.create({
             messages: [
                 { role: 'system', content: GENERATOR_PROMPT },
-                { role: 'user', content: `Based on this interview, generate the architecture spec:\n\n${summary}\n\nBe thorough. Include Mermaid.js diagrams.` }
+                { role: 'user', content: `Based on this interview, generate the architecture spec: \n\n${summary} \n\nBe thorough.Include Mermaid.js diagrams.` }
             ],
             model: 'llama-3.3-70b-versatile',
             temperature: 0.5,
@@ -291,21 +311,30 @@ export async function fetchGitHubRepo(repoUrl) {
     const [, owner, repo] = match;
     const cleanRepo = repo.replace(/\.git$/, '');
 
+    // Fetch with timeout
+    const fetchWithTimeout = (url, timeout = 15000) => {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+        return fetch(url, { signal: controller.signal })
+            .then(res => { clearTimeout(id); return res; })
+            .catch(err => { clearTimeout(id); throw err.name === 'AbortError' ? new Error('Request timed out') : err; });
+    };
+
     try {
         // Fetch repo info
-        const infoRes = await fetch(`https://api.github.com/repos/${owner}/${cleanRepo}`);
+        const infoRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${cleanRepo}`);
         if (!infoRes.ok) throw new Error(`Repo not found: ${owner}/${cleanRepo}`);
         const info = await infoRes.json();
 
         // Fetch file tree (recursive)
-        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${cleanRepo}/git/trees/${info.default_branch}?recursive=1`);
+        const treeRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${cleanRepo}/git/trees/${info.default_branch}?recursive=1`);
         const treeData = await treeRes.json();
 
         // Build file tree string
         const files = (treeData.tree || [])
             .filter(f => f.type === 'blob')
             .map(f => f.path)
-            .slice(0, 200); // Cap at 200 files
+            .slice(0, 200);
 
         // Identify key files to fetch content
         const keyFiles = files.filter(f =>
@@ -317,10 +346,10 @@ export async function fetchGitHubRepo(repoUrl) {
         const fileContents = {};
         for (const filePath of keyFiles) {
             try {
-                const contentRes = await fetch(`https://api.github.com/repos/${owner}/${cleanRepo}/contents/${filePath}`);
+                const contentRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${cleanRepo}/contents/${filePath}`, 8000);
                 const contentData = await contentRes.json();
                 if (contentData.content) {
-                    fileContents[filePath] = atob(contentData.content).substring(0, 2000); // Cap content
+                    fileContents[filePath] = atob(contentData.content).substring(0, 2000);
                 }
             } catch { /* skip unreadable files */ }
         }
