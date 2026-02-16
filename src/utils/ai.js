@@ -279,6 +279,37 @@ export async function chatWithAI(messages, apiKey, mode = 'architect') {
     }
 }
 
+// Streaming version — calls onChunk(textSoFar) as tokens arrive
+export async function streamChatWithAI(messages, apiKey, mode = 'architect', onChunk) {
+    const client = getClient(apiKey);
+    const systemPrompt = PROMPTS[mode] || PROMPTS.architect;
+
+    try {
+        const stream = await client.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...messages
+            ],
+            model: 'llama-3.3-70b-versatile',
+            temperature: 0.7,
+            max_tokens: 2000,
+            stream: true
+        });
+
+        let fullText = '';
+        for await (const chunk of stream) {
+            const delta = chunk.choices[0]?.delta?.content || '';
+            if (delta) {
+                fullText += delta;
+                onChunk(fullText);
+            }
+        }
+        return fullText || 'No response.';
+    } catch (error) {
+        throw new Error(error.message);
+    }
+}
+
 export async function generateSpec(messages, apiKey) {
     const client = getClient(apiKey);
     const summary = messages

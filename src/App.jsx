@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { chatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
+import { chatWithAI, streamChatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
 import { DEFAULT_API_KEY } from './config';
 import jsPDF from 'jspdf';
 
@@ -18,6 +18,8 @@ const Icons = {
   Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>,
   Mic: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg>,
   MicOff: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" y1="2" x2="22" y2="22" /><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" /><path d="M5 10v2a7 7 0 0 0 12 5.12" /><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" /><path d="M9 9v3a3 3 0 0 0 5.12 2.12" /><line x1="12" y1="19" x2="12" y2="22" /></svg>,
+  Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
+  Page: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></svg>,
 };
 
 // Render markdown-ish content with mermaid blocks
@@ -80,6 +82,29 @@ export default function App() {
   const [listening, setListening] = useState(false);
 
   const [needsPermission, setNeedsPermission] = useState(false);
+  const [copiedMsgId, setCopiedMsgId] = useState(null);
+
+  // Load history & key on mount
+  useEffect(() => {
+    try {
+      if (chrome?.storage?.local) {
+        chrome.storage.local.get(['groqApiKey', 'gabrielHistory', 'gabrielMode'], (r) => {
+          if (r?.groqApiKey) setApiKey(r.groqApiKey);
+          else setApiKey(DEFAULT_API_KEY);
+
+          if (r?.gabrielHistory) setMessages(r.gabrielHistory);
+          if (r?.gabrielMode) setMode(r.gabrielMode);
+        });
+      } else { setApiKey(DEFAULT_API_KEY); }
+    } catch { setApiKey(DEFAULT_API_KEY); }
+  }, []);
+
+  // Save history on change
+  useEffect(() => {
+    if (chrome?.storage?.local && messages.length > 0) {
+      chrome.storage.local.set({ gabrielHistory: messages, gabrielMode: mode });
+    }
+  }, [messages, mode]);
 
   // Check mic permission on load
   useEffect(() => {
@@ -135,13 +160,44 @@ export default function App() {
     chrome.runtime.sendMessage({ type: 'START_RECORDING' });
   };
 
-  useEffect(() => {
+  const clearHistory = () => {
+    setMessages([]);
+    setSpec('');
+    setError('');
+    if (chrome?.storage?.local) {
+      chrome.storage.local.remove(['gabrielHistory', 'gabrielMode']);
+    }
+  };
+
+  const copyMessage = (text, id) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMsgId(id);
+    setTimeout(() => setCopiedMsgId(null), 2000);
+  };
+
+  const readPage = async () => {
     try {
-      if (chrome?.storage?.local) {
-        chrome.storage.local.get(['groqApiKey'], (r) => setApiKey(r?.groqApiKey || DEFAULT_API_KEY));
-      } else { setApiKey(DEFAULT_API_KEY); }
-    } catch { setApiKey(DEFAULT_API_KEY); }
-  }, []);
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) { setError('No active tab found.'); return; }
+      // Inject content script if not already present
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js']
+        });
+      } catch { /* already injected */ }
+      // Get visible text
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'get_visible_text' });
+      if (response?.success && response.text) {
+        const context = `📄 **Page: ${response.title}**\n${response.url}\n\n${response.text.substring(0, 4000)}`;
+        setInput(prev => prev + (prev ? '\n\n' : '') + context);
+      } else {
+        setError('Could not read page content.');
+      }
+    } catch (err) {
+      setError('Page read failed: ' + err.message);
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -202,11 +258,17 @@ export default function App() {
     }
 
     try {
-      const response = await chatWithAI(updated, apiKey, currentMode);
+      // Stream the response word-by-word
+      const assistantMsg = { role: 'assistant', content: '' };
+      setMessages([...updated, assistantMsg]);
 
-      // Check completion markers
-      if (response.includes('[READY_TO_GENERATE]')) {
-        const clean = response.replace('[READY_TO_GENERATE]', '').trim();
+      const finalText = await streamChatWithAI(updated, apiKey, currentMode, (textSoFar) => {
+        setMessages([...updated, { role: 'assistant', content: textSoFar }]);
+      });
+
+      // Check completion markers after streaming finishes
+      if (finalText.includes('[READY_TO_GENERATE]')) {
+        const clean = finalText.replace('[READY_TO_GENERATE]', '').trim();
         setMessages([...updated, { role: 'assistant', content: clean + '\n\n⚡ Generating your architecture spec...' }]);
         setGeneratingSpec(true);
         const fullSpec = await generateSpec(updated, apiKey);
@@ -214,8 +276,8 @@ export default function App() {
         setMessages(prev => [...prev, { role: 'assistant', content: '✅ Architecture spec is ready! Scroll down to review or export as PDF.' }]);
         setGeneratingSpec(false);
       } else {
-        // Strip completion markers from other modes
-        const cleaned = response
+        // Strip completion markers
+        const cleaned = finalText
           .replace('[ROAST_COMPLETE]', '')
           .replace('[COMPARE_COMPLETE]', '')
           .replace('[DIAGRAM_COMPLETE]', '')
@@ -379,7 +441,7 @@ export default function App() {
                 <span className="card-text">Generate Diagram</span>
               </button>
               <button className="quick-card" onClick={() => startMode('analyze')}>
-                <span className="card-emoji">�</span>
+                <span className="card-emoji">🔍</span>
                 <span className="card-text">Analyze Repo</span>
               </button>
               <button className="quick-card" onClick={() => startMode('architect', "I have an idea but I don't know where to start")}>
@@ -400,6 +462,15 @@ export default function App() {
             )}
             <div className={`message-bubble ${msg.role}`}>
               <MessageContent text={msg.content} />
+              {msg.role === 'assistant' && (
+                <button
+                  className="msg-copy-btn"
+                  onClick={() => copyMessage(msg.content, i)}
+                  title="Copy response"
+                >
+                  {copiedMsgId === i ? <Icons.Check /> : <Icons.Copy />}
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -463,6 +534,13 @@ export default function App() {
             }
             disabled={loading}
           />
+          <button
+            className="input-action-btn"
+            onClick={readPage}
+            title="Read current page"
+          >
+            <Icons.Page />
+          </button>
           <button
             className={`input-mic-btn ${listening ? 'listening' : ''}`}
             onClick={toggleVoice}

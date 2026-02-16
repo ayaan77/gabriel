@@ -1,5 +1,16 @@
 // Gabriel Extension — Background Service Worker
 
+// Side Panel: Open when user clicks the extension icon
+chrome.sidePanel?.setOptions?.({ path: 'index.html', enabled: true }).catch(() => { });
+
+chrome.action.onClicked.addListener(async (tab) => {
+    try {
+        await chrome.sidePanel.open({ windowId: tab.windowId });
+    } catch {
+        // Falls back to popup if sidePanel isn't supported
+    }
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'START_RECORDING') {
         handleStartRecording();
