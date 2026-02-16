@@ -107,41 +107,70 @@
         <div id="errorMsg" class="error">❌ Permission denied. Please check browser settings.</div>
     </div>
 
-    <script>
-    document.getElementById('enableBtn').addEventListener('click', async () => {
-      const btn = document.getElementById('enableBtn');
-      const status = document.getElementById('status');
-      const arrow = document.getElementById('arrow');
-      
-      btn.disabled = true;
-      btn.innerText = 'Requesting...';
-      status.style.display = 'block';
-      arrow.style.display = 'block';
+    <p id="debugStatus" style="font-size: 10px; color: #555; margin-top: 30px;">Status: Checking...</p>
 
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        
-        document.getElementById('successMsg').style.display = 'block';
-        btn.style.display = 'none';
-        status.style.display = 'none';
-        arrow.style.display = 'none';
-        
-        // Notify extension context (optional but good practice)
-        if (chrome && chrome.runtime) {
-           chrome.runtime.sendMessage({ type: 'PERMISSION_GRANTED' }).catch(() => {}); 
+    <script>
+        async function checkPermission() {
+            try {
+                const result = await navigator.permissions.query({ name: 'microphone' });
+                document.getElementById('debugStatus').textContent = 'Current State: ' + result.state;
+
+                if (result.state === 'granted') {
+                    document.getElementById('successMsg').style.display = 'block';
+                    document.getElementById('enableBtn').style.display = 'none';
+                    document.querySelector('p').style.display = 'none'; // hide instruction
+                    document.getElementById('successMsg').textContent = '✅ Permission already granted! Closing...';
+                    setTimeout(() => window.close(), 2000);
+                }
+
+                result.onchange = () => {
+                    document.getElementById('debugStatus').textContent = 'Current State: ' + result.state;
+                    if (result.state === 'granted') {
+                        document.getElementById('successMsg').style.display = 'block';
+                        document.getElementById('enableBtn').style.display = 'none';
+                        setTimeout(() => window.close(), 1000);
+                    }
+                };
+            } catch (err) {
+                document.getElementById('debugStatus').textContent = 'Check Error: ' + err.message;
+            }
         }
-        
-        setTimeout(() => window.close(), 2000);
-      } catch (err) {
-        console.error(err);
-        document.getElementById('errorMsg').style.display = 'block';
-        document.getElementById('errorMsg').textContent = '❌ Error: ' + err.message;
-        btn.disabled = false;
-        btn.innerText = 'Try Again';
-        status.style.display = 'none';
-        arrow.style.display = 'none';
-      }
-    });
+
+        checkPermission();
+
+        document.getElementById('enableBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('enableBtn');
+            const status = document.getElementById('status');
+            const arrow = document.getElementById('arrow');
+
+            btn.disabled = true;
+            btn.innerText = 'Requesting...';
+            status.style.display = 'block';
+            arrow.style.display = 'block';
+
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Permission granted flow handled by query listener or below
+                document.getElementById('successMsg').style.display = 'block';
+                btn.style.display = 'none';
+                status.style.display = 'none';
+                arrow.style.display = 'none';
+
+                if (chrome && chrome.runtime) {
+                    chrome.runtime.sendMessage({ type: 'PERMISSION_GRANTED' }).catch(() => { });
+                }
+
+                setTimeout(() => window.close(), 2000);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('errorMsg').style.display = 'block';
+                document.getElementById('errorMsg').textContent = '❌ Error: ' + err.message;
+                btn.disabled = false;
+                btn.innerText = 'Try Again';
+                status.style.display = 'none';
+                arrow.style.display = 'none';
+            }
+        });
     </script>
 </body>
 
