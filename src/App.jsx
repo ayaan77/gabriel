@@ -175,27 +175,51 @@ export default function App() {
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  const openSidePanel = async () => {
+    // Open side panel via background script (since direct API might be restricted)
+    // Actually, popups CAN open it if triggered by user action.
+    try {
+      const windowId = (await chrome.windows.getCurrent()).id;
+      await chrome.sidePanel.open({ windowId });
+      window.close(); // Close popup
+    } catch (e) {
+      setError('Could not open side panel: ' + e.message);
+    }
+  };
+
   const readPage = async () => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) { setError('No active tab found.'); return; }
-      // Inject content script if not already present
+      if (tab.url.startsWith('chrome://')) { setError('Cannot read browser internal pages.'); return; }
+
+      // Inject content script explicitly to ensure it's there
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           files: ['content.js']
         });
-      } catch { /* already injected */ }
+      } catch (err) {
+        console.log('Injection note:', err); // Might be already injected, which is fine
+      }
+
+      // Small delay to ensure script initializes
+      await new Promise(r => setTimeout(r, 50));
+
       // Get visible text
-      const response = await chrome.tabs.sendMessage(tab.id, { action: 'get_visible_text' });
-      if (response?.success && response.text) {
-        const context = `📄 **Page: ${response.title}**\n${response.url}\n\n${response.text.substring(0, 4000)}`;
-        setInput(prev => prev + (prev ? '\n\n' : '') + context);
-      } else {
-        setError('Could not read page content.');
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, { action: 'get_visible_text' });
+        if (response?.success && response.text) {
+          const context = `📄 **Page: ${response.title}**\n${response.url}\n\n${response.text.substring(0, 4000)}`;
+          setInput(prev => prev + (prev ? '\n\n' : '') + context);
+        } else {
+          setError('Could not read page text. Try reloading the tab.');
+        }
+      } catch (err) {
+        setError('Failed to communicate with page. Try reloading the tab.');
       }
     } catch (err) {
-      setError('Page read failed: ' + err.message);
+      setError('Page read blocked: ' + err.message);
     }
   };
 

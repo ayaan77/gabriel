@@ -16,7 +16,8 @@
     },
     "host_permissions": [
         "https://api.groq.com/*",
-        "https://api.github.com/*"
+        "https://api.github.com/*",
+        "<all_urls>"
     ],
     "action": {
         "default_popup": "index.html",
