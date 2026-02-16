@@ -78,10 +78,7 @@ export default function App() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef(null);
-  const micStreamRef = useRef(null);
 
-  const [permissionError, setPermissionError] = useState(false);
   const [needsPermission, setNeedsPermission] = useState(false);
 
   // Check mic permission on load
@@ -92,88 +89,50 @@ export default function App() {
         result.onchange = () => {
           setNeedsPermission(result.state !== 'granted');
         };
-      });
+      }).catch(() => { });
     }
+  }, []);
+
+  // Listen for voice results from offscreen document
+  useEffect(() => {
+    const listener = (msg) => {
+      if (msg.type === 'VOICE_STARTED') {
+        setListening(true);
+      }
+      if (msg.type === 'VOICE_RESULT') {
+        const text = msg.final + (msg.interim ? ' ' + msg.interim : '');
+        setInput(text);
+      }
+      if (msg.type === 'VOICE_ERROR') {
+        if (msg.error === 'not-allowed' || msg.error?.includes('permission')) {
+          openPermissionPage();
+        } else {
+          setError('Voice: ' + msg.error);
+        }
+        setListening(false);
+      }
+      if (msg.type === 'VOICE_END') {
+        setListening(false);
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
   const openPermissionPage = () => {
     chrome.tabs.create({ url: 'permission.html' });
-    setPermissionError(false);
     setError('');
   };
 
-  const toggleVoice = async () => {
+  const toggleVoice = () => {
     if (listening) {
-      recognitionRef.current?.stop();
-      micStreamRef.current?.getTracks().forEach(t => t.stop());
-      micStreamRef.current = null;
+      chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
       setListening(false);
       return;
     }
-
-    // Step 1: Request mic permission (REQUIRED in Chrome extension popups)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = stream; // Keep stream alive
-      setPermissionError(false);
-      setNeedsPermission(false);
-    } catch (err) {
-      console.error('Mic permission error:', err);
-      // Auto-open permission page if denied/prompt needed
-      openPermissionPage();
-      return;
-    }
-
-    // Step 2: Start speech recognition
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError('Speech recognition not available. Use Chrome browser.');
-      micStreamRef.current?.getTracks().forEach(t => t.stop());
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    let finalTranscript = input;
-
-    recognition.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalTranscript += (finalTranscript ? ' ' : '') + e.results[i][0].transcript;
-        } else {
-          interim += e.results[i][0].transcript;
-        }
-      }
-      setInput(finalTranscript + (interim ? ' ' + interim : ''));
-    };
-
-    recognition.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'permission-denied') {
-        openPermissionPage();
-      } else if (e.error !== 'aborted') {
-        setError('Voice error: ' + e.error);
-      }
-      micStreamRef.current?.getTracks().forEach(t => t.stop());
-      setListening(false);
-    };
-
-    recognition.onend = () => {
-      micStreamRef.current?.getTracks().forEach(t => t.stop());
-      micStreamRef.current = null;
-      setListening(false);
-    };
-
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-      setListening(true);
-    } catch (err) {
-      setError('Could not start voice recognition: ' + err.message);
-      micStreamRef.current?.getTracks().forEach(t => t.stop());
-    }
+    // Send start command to background → offscreen
+    chrome.runtime.sendMessage({ type: 'START_RECORDING' });
   };
 
   useEffect(() => {
@@ -477,24 +436,6 @@ export default function App() {
       {error && (
         <div className="error-banner">
           <Icons.AlertCircle /> {error}
-          {permissionError && (
-            <button
-              onClick={openPermissionPage}
-              style={{
-                marginLeft: '10px',
-                background: 'rgba(239, 68, 68, 0.2)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                color: '#ef4444',
-                padding: '2px 8px',
-                borderRadius: '4px',
-                fontSize: '10px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Fix Permissions
-            </button>
-          )}
           <button onClick={() => setError('')} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px' }}>✕</button>
         </div>
       )}
