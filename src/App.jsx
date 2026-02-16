@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { chatWithAI, generateSpec } from './utils/ai';
+import { chatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
 import { DEFAULT_API_KEY } from './config';
 import jsPDF from 'jspdf';
 
@@ -14,9 +14,56 @@ const Icons = {
   Loader: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>,
   Refresh: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></svg>,
   Code: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>,
+  Copy: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
+  Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>,
 };
 
+// Render markdown-ish content with mermaid blocks
+function MessageContent({ text }) {
+  const parts = [];
+  const mermaidRegex = /```mermaid\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = mermaidRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(<span key={key++}>{text.slice(lastIndex, match.index)}</span>);
+    }
+    parts.push(<MermaidBlock key={key++} code={match[1].trim()} />);
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
+  }
+
+  return <div className="message-text">{parts}</div>;
+}
+
+function MermaidBlock({ code }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText('```mermaid\n' + code + '\n```');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="mermaid-block">
+      <div className="mermaid-header">
+        <span>📊 Mermaid Diagram</span>
+        <button className="copy-btn" onClick={copy} title="Copy diagram code">
+          {copied ? <><Icons.Check /> Copied!</> : <><Icons.Copy /> Copy</>}
+        </button>
+      </div>
+      <pre className="mermaid-code">{code}</pre>
+      <div className="mermaid-hint">Paste into mermaid.live or any Markdown editor to render</div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [mode, setMode] = useState('architect'); // architect, roast, compare, diagram, analyze
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -25,6 +72,7 @@ export default function App() {
   const [spec, setSpec] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [generatingSpec, setGeneratingSpec] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -41,7 +89,7 @@ export default function App() {
   }, [messages, loading]);
 
   const startNew = () => {
-    setMessages([]); setSpec(''); setInput(''); setError(''); setGeneratingSpec(false);
+    setMessages([]); setSpec(''); setInput(''); setError(''); setGeneratingSpec(false); setMode('architect'); setAnalyzing(false);
   };
 
   const saveApiKey = () => {
@@ -50,8 +98,17 @@ export default function App() {
     setShowSettings(false); setError('');
   };
 
-  const sendMessage = async (text) => {
-    if (!text.trim() || loading || spec) return;
+  const startMode = (newMode, initialMsg = '') => {
+    setMode(newMode);
+    setMessages([]);
+    setSpec('');
+    setError('');
+    if (initialMsg) sendMessage(initialMsg, newMode);
+  };
+
+  const sendMessage = async (text, overrideMode = null) => {
+    if (!text.trim() || loading) return;
+    const currentMode = overrideMode || mode;
     const userMsg = { role: 'user', content: text.trim() };
     const updated = [...messages, userMsg];
     setMessages(updated);
@@ -59,22 +116,47 @@ export default function App() {
     setLoading(true);
     setError('');
 
+    // Check if it's a GitHub URL for analyze mode
+    const ghMatch = text.match(/github\.com\/[^\/]+\/[^\/\s]+/);
+    if (currentMode === 'analyze' && ghMatch) {
+      setAnalyzing(true);
+      setMessages(prev => [...prev, { role: 'assistant', content: '🔍 Fetching repository structure from GitHub...' }]);
+      try {
+        const repoData = await fetchGitHubRepo(text.trim());
+        const context = buildRepoContext(repoData);
+        const response = await chatWithAI([{ role: 'user', content: context }], apiKey, 'analyze');
+        setMessages([...updated, { role: 'assistant', content: response }]);
+      } catch (err) {
+        setError(err.message);
+        setMessages(updated);
+      } finally {
+        setLoading(false);
+        setAnalyzing(false);
+      }
+      return;
+    }
+
     try {
-      const response = await chatWithAI(updated, apiKey);
+      const response = await chatWithAI(updated, apiKey, currentMode);
 
-      // Check if AI is ready to generate
+      // Check completion markers
       if (response.includes('[READY_TO_GENERATE]')) {
-        const cleanResponse = response.replace('[READY_TO_GENERATE]', '').trim();
-        setMessages([...updated, { role: 'assistant', content: cleanResponse + '\n\n⚡ Generating your architecture spec...' }]);
+        const clean = response.replace('[READY_TO_GENERATE]', '').trim();
+        setMessages([...updated, { role: 'assistant', content: clean + '\n\n⚡ Generating your architecture spec...' }]);
         setGeneratingSpec(true);
-
-        // Generate the full spec
         const fullSpec = await generateSpec(updated, apiKey);
         setSpec(fullSpec);
-        setMessages(prev => [...prev, { role: 'assistant', content: '✅ Your architecture spec is ready! Scroll down to review it, or export as PDF.', isSpec: true }]);
+        setMessages(prev => [...prev, { role: 'assistant', content: '✅ Architecture spec is ready! Scroll down to review or export as PDF.' }]);
         setGeneratingSpec(false);
       } else {
-        setMessages([...updated, { role: 'assistant', content: response }]);
+        // Strip completion markers from other modes
+        const cleaned = response
+          .replace('[ROAST_COMPLETE]', '')
+          .replace('[COMPARE_COMPLETE]', '')
+          .replace('[DIAGRAM_COMPLETE]', '')
+          .replace('[ANALYSIS_COMPLETE]', '')
+          .trim();
+        setMessages([...updated, { role: 'assistant', content: cleaned }]);
       }
     } catch (err) {
       setError(err.message);
@@ -83,195 +165,49 @@ export default function App() {
     }
   };
 
-  const quickStart = (text) => sendMessage(text);
-
-  // Multi-page PDF generation
+  // Multi-page PDF
   const downloadPDF = () => {
-    if (!spec) return;
+    const content = spec || messages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n');
+    if (!content) return;
     const pdf = new jsPDF('p', 'mm', 'a4');
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 15;
-    const usableWidth = pageWidth - margin * 2;
-    let y = margin;
-
-    // Colors
-    const colors = {
-      bg: [5, 5, 16],
-      heading: [99, 102, 241],
-      subheading: [6, 182, 212],
-      text: [200, 200, 220],
-      muted: [120, 120, 150],
-      tableBorder: [40, 40, 70],
-      tableHeader: [20, 20, 45],
-      tableRow: [12, 12, 30],
-    };
-
-    const addPage = () => {
-      pdf.addPage();
-      pdf.setFillColor(...colors.bg);
-      pdf.rect(0, 0, pageWidth, pageHeight, 'F');
-      y = margin;
-    };
-
-    const checkSpace = (needed) => {
-      if (y + needed > pageHeight - margin) addPage();
-    };
-
-    // First page background
-    pdf.setFillColor(...colors.bg);
-    pdf.rect(0, 0, pageWidth, pageHeight, 'F');
-
-    // Title
-    pdf.setTextColor(...colors.heading);
-    pdf.setFontSize(22);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('Architecture Specification', margin, y + 8);
-    y += 16;
-    pdf.setDrawColor(...colors.heading);
-    pdf.setLineWidth(0.5);
-    pdf.line(margin, y, pageWidth - margin, y);
-    y += 8;
-
-    // Footer on first page
-    pdf.setFontSize(8);
-    pdf.setTextColor(...colors.muted);
-    pdf.text('Generated by Gabriel', margin, pageHeight - 8);
-
-    // Parse and render spec
-    const lines = spec.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // ## Heading
-      if (line.startsWith('## ')) {
-        checkSpace(14);
-        y += 6;
-        pdf.setTextColor(...colors.subheading);
-        pdf.setFontSize(13);
-        pdf.setFont('helvetica', 'bold');
-        pdf.text(line.replace('## ', ''), margin, y);
-        y += 2;
-        pdf.setDrawColor(...colors.tableBorder);
-        pdf.setLineWidth(0.3);
-        pdf.line(margin, y + 1, pageWidth - margin, y + 1);
-        y += 6;
-        continue;
-      }
-
-      // ### Sub-heading
-      if (line.startsWith('### ')) {
-        checkSpace(12);
-        y += 4;
-        pdf.setTextColor(...colors.heading);
-        pdf.setFontSize(11);
-        pdf.setFont('helvetica', 'bold');
-        pdf.text(line.replace('### ', ''), margin, y);
-        y += 6;
-        continue;
-      }
-
-      // Table row
-      if (line.startsWith('|') && line.endsWith('|')) {
-        const cells = line.split('|').filter(c => c.trim()).map(c => c.trim());
-        if (cells.every(c => /^[-:]+$/.test(c))) continue; // separator row
-
-        checkSpace(8);
-        const isHeader = i > 0 && lines[i + 1]?.includes('---');
-        const colWidth = usableWidth / cells.length;
-
-        if (isHeader) {
-          pdf.setFillColor(...colors.tableHeader);
-          pdf.setTextColor(255, 255, 255);
-          pdf.setFont('helvetica', 'bold');
-        } else {
-          pdf.setFillColor(...colors.tableRow);
-          pdf.setTextColor(...colors.text);
-          pdf.setFont('helvetica', 'normal');
-        }
-
-        pdf.rect(margin, y - 4, usableWidth, 7, 'F');
-        pdf.setFontSize(7);
-        cells.forEach((cell, idx) => {
-          const cellText = cell.length > 30 ? cell.substring(0, 28) + '...' : cell;
-          pdf.text(cellText, margin + idx * colWidth + 2, y);
-        });
-        y += 7;
-        continue;
-      }
-
-      // Bold text: **text**
-      if (line.includes('**')) {
-        checkSpace(6);
-        pdf.setTextColor(...colors.text);
-        pdf.setFontSize(9);
-        pdf.setFont('helvetica', 'bold');
-        const cleaned = line.replace(/\*\*/g, '').replace(/^- /, '• ');
-        const splitLines = pdf.splitTextToSize(cleaned, usableWidth);
-        splitLines.forEach(sl => {
-          checkSpace(5);
-          pdf.text(sl, margin, y);
-          y += 4.5;
-        });
-        pdf.setFont('helvetica', 'normal');
-        continue;
-      }
-
-      // Bullet points
-      if (line.startsWith('- ') || line.startsWith('* ')) {
-        checkSpace(6);
-        pdf.setTextColor(...colors.text);
-        pdf.setFontSize(9);
-        pdf.setFont('helvetica', 'normal');
-        const cleaned = '• ' + line.replace(/^[-*] /, '');
-        const splitLines = pdf.splitTextToSize(cleaned, usableWidth - 4);
-        splitLines.forEach(sl => {
-          checkSpace(5);
-          pdf.text(sl, margin + 3, y);
-          y += 4.5;
-        });
-        continue;
-      }
-
-      // Empty line
-      if (!line.trim()) {
-        y += 3;
-        continue;
-      }
-
-      // Normal text
-      checkSpace(6);
-      pdf.setTextColor(...colors.text);
-      pdf.setFontSize(9);
-      pdf.setFont('helvetica', 'normal');
-      const splitLines = pdf.splitTextToSize(line, usableWidth);
-      splitLines.forEach(sl => {
-        checkSpace(5);
-        pdf.text(sl, margin, y);
-        y += 4.5;
-      });
+    const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 15, uw = pw - m * 2;
+    let y = m;
+    const c = { bg: [5, 5, 16], h: [99, 102, 241], sh: [6, 182, 212], t: [200, 200, 220], mt: [120, 120, 150], tb: [40, 40, 70], th: [20, 20, 45], tr: [12, 12, 30] };
+    const addPg = () => { pdf.addPage(); pdf.setFillColor(...c.bg); pdf.rect(0, 0, pw, ph, 'F'); y = m; };
+    const chk = (n) => { if (y + n > ph - m) addPg(); };
+    pdf.setFillColor(...c.bg); pdf.rect(0, 0, pw, ph, 'F');
+    pdf.setTextColor(...c.h); pdf.setFontSize(20); pdf.setFont('helvetica', 'bold');
+    pdf.text('Gabriel — Architecture Spec', m, y + 8); y += 14;
+    pdf.setDrawColor(...c.h); pdf.setLineWidth(0.5); pdf.line(m, y, pw - m, y); y += 8;
+    const lines = content.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('## ')) { chk(14); y += 6; pdf.setTextColor(...c.sh); pdf.setFontSize(13); pdf.setFont('helvetica', 'bold'); pdf.text(line.replace('## ', ''), m, y); y += 2; pdf.setDrawColor(...c.tb); pdf.setLineWidth(0.3); pdf.line(m, y + 1, pw - m, y + 1); y += 6; continue; }
+      if (line.startsWith('### ')) { chk(12); y += 4; pdf.setTextColor(...c.h); pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.text(line.replace('### ', ''), m, y); y += 6; continue; }
+      if (line.startsWith('|') && line.endsWith('|')) { const cells = line.split('|').filter(x => x.trim()).map(x => x.trim()); if (cells.every(x => /^[-:]+$/.test(x))) continue; chk(8); const isH = lines[lines.indexOf(line) + 1]?.includes('---'); const cw = uw / cells.length; pdf.setFillColor(...(isH ? c.th : c.tr)); pdf.setTextColor(isH ? 255 : c.t[0], isH ? 255 : c.t[1], isH ? 255 : c.t[2]); pdf.setFont('helvetica', isH ? 'bold' : 'normal'); pdf.rect(m, y - 4, uw, 7, 'F'); pdf.setFontSize(7); cells.forEach((cl, i) => { pdf.text(cl.length > 28 ? cl.substring(0, 26) + '..' : cl, m + i * cw + 2, y); }); y += 7; continue; }
+      if (line.startsWith('- ') || line.startsWith('* ')) { chk(6); pdf.setTextColor(...c.t); pdf.setFontSize(9); pdf.setFont('helvetica', 'normal'); const sl = pdf.splitTextToSize('• ' + line.replace(/^[-*] /, ''), uw - 4); sl.forEach(s => { chk(5); pdf.text(s, m + 3, y); y += 4.5; }); continue; }
+      if (!line.trim()) { y += 3; continue; }
+      if (line.startsWith('```')) { continue; } // skip code fences
+      chk(6); pdf.setTextColor(...c.t); pdf.setFontSize(9); pdf.setFont('helvetica', line.includes('**') ? 'bold' : 'normal'); const cl = line.replace(/\*\*/g, ''); const sl = pdf.splitTextToSize(cl, uw); sl.forEach(s => { chk(5); pdf.text(s, m, y); y += 4.5; });
     }
-
-    // Add page numbers
-    const totalPages = pdf.internal.getNumberOfPages();
-    for (let p = 1; p <= totalPages; p++) {
-      pdf.setPage(p);
-      pdf.setFontSize(8);
-      pdf.setTextColor(...colors.muted);
-      pdf.text(`Page ${p} of ${totalPages}`, pageWidth - margin - 20, pageHeight - 8);
-      if (p > 1) pdf.text('Gabriel', margin, pageHeight - 8);
-    }
-
-    pdf.save('architecture-spec.pdf');
+    const tp = pdf.internal.getNumberOfPages();
+    for (let p = 1; p <= tp; p++) { pdf.setPage(p); pdf.setFontSize(8); pdf.setTextColor(...c.mt); pdf.text(`Page ${p}/${tp}`, pw - m - 18, ph - 8); pdf.text('Gabriel', m, ph - 8); }
+    pdf.save('gabriel-spec.pdf');
   };
 
   const msgCount = messages.filter(m => m.role === 'user').length;
 
+  const MODE_LABELS = {
+    architect: '🏗️ Architect',
+    roast: '🔥 Roast',
+    compare: '⚖️ Compare',
+    diagram: '📊 Diagram',
+    analyze: '🔍 Analyze'
+  };
+
   return (
     <div className="app-container">
 
-      {/* Settings Overlay */}
+      {/* Settings */}
       {showSettings && (
         <div className="settings-overlay">
           <div className="settings-panel">
@@ -279,7 +215,7 @@ export default function App() {
             <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="form-input" placeholder="gsk_..." />
             <div className="settings-actions">
               <button className="btn btn-ghost" onClick={() => setShowSettings(false)}>Cancel</button>
-              <button className="btn btn-next" onClick={saveApiKey}>Save Key</button>
+              <button className="btn btn-next" onClick={saveApiKey}>Save</button>
             </div>
           </div>
         </div>
@@ -291,14 +227,14 @@ export default function App() {
           <div className="header-logo"><Icons.Wand /></div>
           <div>
             <div className="header-title">Gabriel</div>
-            <div className="header-subtitle">ONLINE</div>
+            <div className="header-subtitle">
+              {messages.length > 0 ? MODE_LABELS[mode] : 'ONLINE'}
+            </div>
           </div>
         </div>
         <div className="header-actions">
-          {spec && (
-            <button className="header-btn primary" onClick={downloadPDF}>
-              <Icons.Download /> PDF
-            </button>
+          {(spec || messages.length > 2) && (
+            <button className="header-btn primary" onClick={downloadPDF}><Icons.Download /> PDF</button>
           )}
           <button className="header-btn" onClick={startNew}><Icons.Refresh /></button>
           <button className="header-btn" onClick={() => setShowSettings(true)}><Icons.Settings /></button>
@@ -308,39 +244,39 @@ export default function App() {
       {/* Messages Area */}
       <div className="main-content">
 
-        {/* Home — no messages yet */}
+        {/* Home — no messages */}
         {messages.length === 0 && !spec && (
           <div className="home-view fade-in">
-            <div className="hero-icon"><Icons.Code /></div>
-            <h2 className="hero-title">Your AI Architect</h2>
+            <div className="hero-icon"><Icons.Wand /></div>
+            <h2 className="hero-title">Gabriel</h2>
             <p className="hero-description">
-              Describe what you're building. I'll ask the right technical questions, challenge your assumptions, then generate a battle-tested architecture spec.
+              Your AI architect. Describe your project, roast your stack, compare technologies, or analyze a GitHub repo.
             </p>
 
             <div className="cards-grid">
-              <button className="quick-card" onClick={() => quickStart('I want to build a SaaS platform with multi-tenant architecture, user auth, and billing')}>
-                <span className="card-emoji">🚀</span>
-                <span className="card-text">SaaS Platform</span>
+              <button className="quick-card" onClick={() => startMode('architect', 'I want to build a new project')}>
+                <span className="card-emoji">🏗️</span>
+                <span className="card-text">Design Architecture</span>
               </button>
-              <button className="quick-card" onClick={() => quickStart('I need a real-time collaborative app like Figma or Google Docs with WebSocket support')}>
-                <span className="card-emoji">⚡</span>
-                <span className="card-text">Real-time App</span>
+              <button className="quick-card" onClick={() => startMode('roast')}>
+                <span className="card-emoji">🔥</span>
+                <span className="card-text">Roast My Stack</span>
               </button>
-              <button className="quick-card" onClick={() => quickStart("I'm building a REST API backend with auth, rate limiting, and a worker queue for background jobs")}>
-                <span className="card-emoji">🔧</span>
-                <span className="card-text">API Backend</span>
+              <button className="quick-card" onClick={() => startMode('compare')}>
+                <span className="card-emoji">⚖️</span>
+                <span className="card-text">Compare Tech</span>
               </button>
-              <button className="quick-card" onClick={() => quickStart("I'm building a mobile app with React Native, offline-first storage, and push notifications")}>
-                <span className="card-emoji">📱</span>
-                <span className="card-text">Mobile App</span>
+              <button className="quick-card" onClick={() => startMode('diagram')}>
+                <span className="card-emoji">�</span>
+                <span className="card-text">Generate Diagram</span>
               </button>
-              <button className="quick-card" onClick={() => quickStart('I want to build a marketplace platform with escrow payments and a review system')}>
-                <span className="card-emoji">🛒</span>
-                <span className="card-text">Marketplace</span>
+              <button className="quick-card" onClick={() => startMode('analyze')}>
+                <span className="card-emoji">�</span>
+                <span className="card-text">Analyze Repo</span>
               </button>
-              <button className="quick-card" onClick={() => quickStart('I want to build a developer tool / CLI / SDK with plugin architecture')}>
-                <span className="card-emoji">🤖</span>
-                <span className="card-text">Dev Tool / CLI</span>
+              <button className="quick-card" onClick={() => startMode('architect', "I have an idea but I don't know where to start")}>
+                <span className="card-emoji">💡</span>
+                <span className="card-text">I Have an Idea</span>
               </button>
             </div>
           </div>
@@ -355,33 +291,33 @@ export default function App() {
               </div>
             )}
             <div className={`message-bubble ${msg.role}`}>
-              <div className="message-text">{msg.content}</div>
+              <MessageContent text={msg.content} />
             </div>
           </div>
         ))}
 
-        {/* Loading indicator */}
-        {loading && (
+        {/* Loading */}
+        {loading && !analyzing && (
           <div className="message assistant">
             <div className="message-avatar"><Icons.Wand /></div>
             <div className="message-bubble assistant">
-              <div className="typing-indicator">
-                <span></span><span></span><span></span>
-              </div>
+              <div className="typing-indicator"><span></span><span></span><span></span></div>
             </div>
           </div>
         )}
 
-        {/* Spec Output */}
+        {/* Spec output */}
         {spec && (
           <div className="spec-container fade-in">
             <div className="spec-header">
               <Icons.Code /> Architecture Specification
               <button className="header-btn primary" onClick={downloadPDF} style={{ marginLeft: 'auto', fontSize: '10px' }}>
-                <Icons.Download /> Export PDF
+                <Icons.Download /> PDF
               </button>
             </div>
-            <div className="spec-content" id="spec-content">{spec}</div>
+            <div className="spec-content" id="spec-content">
+              <MessageContent text={spec} />
+            </div>
           </div>
         )}
 
@@ -396,7 +332,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Footer Input */}
+      {/* Footer */}
       <div className="footer">
         <div className="input-wrapper">
           <input
@@ -404,13 +340,25 @@ export default function App() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
-            placeholder={messages.length === 0 ? "Describe what you're building..." : "Answer the question..."}
-            disabled={loading || !!spec}
+            placeholder={
+              mode === 'analyze' && messages.length === 0
+                ? 'Paste a GitHub repo URL...'
+                : mode === 'roast' && messages.length === 0
+                  ? 'Describe your current tech stack...'
+                  : mode === 'compare' && messages.length === 0
+                    ? 'e.g. "Supabase vs Firebase for my SaaS"'
+                    : mode === 'diagram' && messages.length === 0
+                      ? 'Describe the system to diagram...'
+                      : messages.length === 0
+                        ? "Describe what you're building..."
+                        : 'Type your response...'
+            }
+            disabled={loading}
           />
           <button
             className={`input-send-btn ${input.trim() && !loading ? '' : 'inactive'}`}
             onClick={() => sendMessage(input)}
-            disabled={loading || !input.trim() || !!spec}
+            disabled={loading || !input.trim()}
           >
             {loading ? <Icons.Loader /> : <Icons.Send />}
           </button>
