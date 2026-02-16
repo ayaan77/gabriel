@@ -82,6 +82,25 @@ export default function App() {
   const micStreamRef = useRef(null);
 
   const [permissionError, setPermissionError] = useState(false);
+  const [needsPermission, setNeedsPermission] = useState(false);
+
+  // Check mic permission on load
+  useEffect(() => {
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: 'microphone' }).then((result) => {
+        setNeedsPermission(result.state !== 'granted');
+        result.onchange = () => {
+          setNeedsPermission(result.state !== 'granted');
+        };
+      });
+    }
+  }, []);
+
+  const openPermissionPage = () => {
+    chrome.tabs.create({ url: 'permission.html' });
+    setPermissionError(false);
+    setError('');
+  };
 
   const toggleVoice = async () => {
     if (listening) {
@@ -97,11 +116,11 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream; // Keep stream alive
       setPermissionError(false);
+      setNeedsPermission(false);
     } catch (err) {
       console.error('Mic permission error:', err);
-      // If permission denied/dismissed, show link to open permission page
-      setPermissionError(true);
-      setError('Microphone access needed. Click "Fix Permissions" to enable.');
+      // Auto-open permission page if denied/prompt needed
+      openPermissionPage();
       return;
     }
 
@@ -133,8 +152,7 @@ export default function App() {
 
     recognition.onerror = (e) => {
       if (e.error === 'not-allowed' || e.error === 'permission-denied') {
-        setPermissionError(true);
-        setError('Microphone permission blocked. Click "Fix Permissions".');
+        openPermissionPage();
       } else if (e.error !== 'aborted') {
         setError('Voice error: ' + e.error);
       }
@@ -156,12 +174,6 @@ export default function App() {
       setError('Could not start voice recognition: ' + err.message);
       micStreamRef.current?.getTracks().forEach(t => t.stop());
     }
-  };
-
-  const openPermissionPage = () => {
-    chrome.tabs.create({ url: 'permission.html' });
-    setPermissionError(false);
-    setError('');
   };
 
   useEffect(() => {
@@ -367,6 +379,12 @@ export default function App() {
 
       {/* Messages Area */}
       <div className="main-content">
+        {needsPermission && (
+          <div className="permission-banner" onClick={openPermissionPage}>
+            <span>🎤 Voice input requires permission. Tap to enable.</span>
+            <div style={{ fontWeight: 'bold' }}>➜</div>
+          </div>
+        )}
 
         {/* Home — no messages */}
         {messages.length === 0 && !spec && (
