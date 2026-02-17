@@ -1,7 +1,9 @@
+/* global chrome */
 import { useState, useEffect, useCallback } from 'react';
 import { chatWithAI, streamChatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from '../utils/ai';
 import { analyzeWebsite } from '../utils/intelligence';
 import { DEFAULT_API_KEY } from '../config';
+import { analyzePage, buildAIContext, exportAnalysis, generateReportMetadata } from '../utils/croAnalyzer';
 
 export function useGabriel() {
     const [mode, setMode] = useState('architect');
@@ -13,8 +15,13 @@ export function useGabriel() {
     const [error, setError] = useState('');
     const [spec, setSpec] = useState('');
     const [generatingSpec, setGeneratingSpec] = useState(false);
-    const [analyzing, setAnalyzing] = useState(false);
     const [modelTier, setModelTier] = useState('high');
+    const [intelligenceReport, setIntelligenceReport] = useState(null);
+
+    // CRO Analysis State
+    const [croAnalysis, setCroAnalysis] = useState(null);
+    const [croLoading, setCroLoading] = useState(false);
+    const [croError, setCroError] = useState('');
 
     // Search & Bookmark State
     const [searchQuery, setSearchQuery] = useState('');
@@ -76,7 +83,7 @@ export function useGabriel() {
         setError('');
         setGeneratingSpec(false);
         setMode('architect');
-        setAnalyzing(false);
+        setMode('architect');
         setSearchQuery('');
         setShowBookmarksOnly(false);
     }, []);
@@ -148,12 +155,22 @@ export function useGabriel() {
 
                     const IntelContext = `TARGET ANALYSIS DATA:
 Domain: ${data.domain}
-Tech Stack Detected: ${JSON.stringify(data.stack, null, 2)}
+
+PAGE CONTENT:
+Title: ${data.pageContent.title}
+Description: ${data.pageContent.description}
+Headings: ${data.pageContent.headings.join(' | ')}
+Sample Text: "${data.pageContent.keyPhrases.substring(0, 1500)}..."
+
+TECH STACK:
+${JSON.stringify(data.stack, null, 2)}
+
+ADS & TRAFFIC:
 Meta Ads Library: ${data.metaAdsUrl}
 Google Ads Transparency: ${data.googleAdsUrl}
 Traffic Estimate: ${data.estimatedTraffic}
 
-Analyze this data and provide a competitive intelligence report.`;
+Analyze this data and provide a competitive intelligence report. Focus on the PAGE CONTENT to understand their brand positioning and proposition.`;
 
                     const finalIntel = await streamChatWithAI([{ role: 'user', content: IntelContext }], apiKey, 'intelligence', (textSoFar) => {
                         setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
@@ -170,7 +187,25 @@ Analyze this data and provide a competitive intelligence report.`;
 
             // 3. Normal Chat Mode
             const finalText = await streamChatWithAI(updated, apiKey, currentMode, (textSoFar) => {
-                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
+                // Check for thinking tags
+                let content = textSoFar;
+                let thinking = '';
+
+                const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
+                if (thinkMatch) {
+                    thinking = thinkMatch[1].trim();
+                    content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                } else if (textSoFar.includes('<think>')) {
+                    // Partial think tag
+                    thinking = textSoFar.split('<think>')[1].trim();
+                    content = textSoFar.split('<think>')[0].trim();
+                }
+
+                setMessages(prev => prev.map(m => m.id === assistantId ? {
+                    ...m,
+                    content: content,
+                    thinking: thinking
+                } : m));
             }, modelTier);
 
             // Handle Completion Markers
@@ -206,16 +241,288 @@ Analyze this data and provide a competitive intelligence report.`;
         }
     }, [apiKey, loading, messages, mode, modelTier]);
 
+    // CRO Analysis Function
+    const runCROAnalysis = useCallback(async () => {
+        if (!apiKey || apiKey.trim() === '') {
+            const msg = 'No API key found. Click ⚙️ Settings to enter your Groq key.';
+            setCroError(msg);
+            setMessages(prev => [...prev, { role: 'assistant', content: '❌ ' + msg, id: Date.now().toString() }]);
+            return;
+        }
+
+        setCroLoading(true);
+        setCroError('');
+        setCroAnalysis(null);
+
+        try {
+            // Get current tab
+            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+
+            if (!tab?.id) {
+                const msg = 'No active tab found. Please click inside the web page and try again.';
+                setCroError(msg);
+                setMessages(prev => [...prev, { role: 'assistant', content: '❌ ' + msg, id: Date.now().toString() }]);
+                setCroLoading(false);
+                return;
+            }
+
+            if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('about:')) {
+                const msg = 'Cannot analyze browser internal pages. Please navigate to a real website.';
+                setCroError(msg);
+                setMessages(prev => [...prev, { role: 'assistant', content: '❌ ' + msg, id: Date.now().toString() }]);
+                setCroLoading(false);
+                return;
+            }
+
+            // Status: Connecting
+            setMessages(prev => {
+                const filtered = prev.filter(m => m.role === 'user');
+                return [...filtered, { role: 'assistant', content: '🔌 Connecting to page...', id: Date.now() + '-status' }];
+            });
+
+            // Inject content script if needed
+            try {
+                // First inject html2canvas dependency
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['lib/html2canvas.min.js']
+                });
+            } catch (injectErr) {
+                console.warn('html2canvas injection note:', injectErr);
+            }
+
+            try {
+                // Then inject the main content script
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content.js']
+                });
+            } catch (injectErr) {
+                console.warn('Content script injection note:', injectErr);
+            }
+            await new Promise(r => setTimeout(r, 800));
+
+            // Quick ping to verify content script is alive
+            try {
+                const pingResp = await new Promise((resolve) => {
+                    const timer = setTimeout(() => resolve(null), 2000);
+                    chrome.tabs.sendMessage(tab.id, { action: 'ping' })
+                        .then(resp => { clearTimeout(timer); resolve(resp); })
+                        .catch(() => { clearTimeout(timer); resolve(null); });
+                });
+                if (pingResp?.success) {
+                    console.log('✅ Content script connected:', pingResp.version);
+                } else {
+                    console.warn('⚠️ Ping failed, content script may not be responding');
+                }
+            } catch (e) {
+                console.warn('Ping check failed:', e);
+            }
+
+            // Capture CRO data from content script with generous timeout
+            const sendWithTimeout = (tabId, message, ms = 15000) => {
+                return new Promise((resolve) => {
+                    const timer = setTimeout(() => {
+                        console.warn('CRO data capture timed out after', ms, 'ms');
+                        resolve(null);
+                    }, ms);
+                    chrome.tabs.sendMessage(tabId, message)
+                        .then(resp => { clearTimeout(timer); resolve(resp); })
+                        .catch(err => {
+                            clearTimeout(timer);
+                            console.warn('sendMessage error:', err?.message || err);
+                            resolve({ success: false, error: err?.message || 'Connection failed' });
+                        });
+                });
+            };
+
+            // Get CRO data - first attempt
+            let response = null;
+            try {
+                response = await sendWithTimeout(tab.id, { action: 'get_cro_data' });
+            } catch (e) {
+                console.warn('First CRO attempt threw:', e);
+            }
+
+            // Retry once if first attempt fails (content script may need refresh)
+            if (!response?.success) {
+                console.warn('First CRO capture attempt failed, retrying...');
+                setMessages(prev => prev.map(m => m.id?.includes('-status') ? { ...m, content: '🔄 Retrying page capture...' } : m));
+
+                // Re-inject content script before retry
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['lib/html2canvas.min.js']
+                    });
+                } catch (e) { /* ignore */ }
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['content.js']
+                    });
+                } catch (e) { /* ignore */ }
+
+                await new Promise(r => setTimeout(r, 1500));
+
+                try {
+                    response = await sendWithTimeout(tab.id, { action: 'get_cro_data' });
+                } catch (e) {
+                    console.warn('Second CRO attempt threw:', e);
+                }
+            }
+
+            if (!response?.success) {
+                const detail = response?.error || 'No response from content script';
+                console.error('CRO capture failed:', detail);
+                const msg = `Failed to capture page data. ${detail.includes('Could not') ? 'The page may be blocking scripts.' : 'Please reload the page and try again.'}`;
+                setCroError(msg);
+                setMessages(prev => [...prev, { role: 'assistant', content: '❌ ' + msg, id: Date.now().toString() }]);
+                setCroLoading(false);
+                return;
+            }
+
+            const assistantId = Date.now() + '-cro';
+
+            // Initial placeholder
+            setMessages([{
+                role: 'assistant',
+                content: '⏳ **Initializing CRO Audit...**',
+                id: assistantId
+            }]);
+
+            // RAG Analysis Steps (True RAG with embeddings)
+            const steps = [
+                { msg: "🔍 Scanning page structure...", duration: 1000 },
+                { msg: "🧠 Loading embedding model...", duration: 2000 },
+                { msg: "📊 Generating page embeddings...", duration: 1500 },
+                { msg: "📚 Retrieving relevant patterns from Knowledge Base...", duration: 2000 },
+                { msg: "🎯 Running semantic similarity search...", duration: 1500 },
+                { msg: "⚖️ Evaluating trust signals and credibility...", duration: 1000 },
+                { msg: "🎨 Analyzing visual hierarchy and layout...", duration: 1000 },
+                { msg: "📈 Calculating conversion probability score...", duration: 1500 }
+            ];
+
+            for (const step of steps) {
+                setMessages([{
+                    role: 'assistant',
+                    content: `⏳ **CRO Audit In Progress**\n\n${step.msg}`,
+                    id: assistantId
+                }]);
+                await new Promise(r => setTimeout(r, step.duration));
+            }
+
+            // Run RAG pattern analysis (async)
+            console.log('🧠 Starting RAG analysis...');
+            const analysis = await analyzePage(response.data);
+            console.log(`✅ RAG analysis complete. Using embeddings: ${analysis.usingRAG}`);
+
+            // Build AI context
+            const aiContext = buildAIContext(analysis, response.data);
+
+            // Get AI analysis
+            setMessages([{
+                role: 'assistant',
+                content: '🎯 **CRO Analysis Starting**\n\nSynthesizing final report...',
+                id: assistantId
+            }]);
+
+            const aiResponse = await streamChatWithAI(
+                [{ role: 'user', content: aiContext }],
+                apiKey,
+                'cro',
+                (textSoFar) => {
+                    // Check for thinking tags
+                    let content = textSoFar;
+                    let thinking = '';
+
+                    const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
+                    if (thinkMatch) {
+                        thinking = thinkMatch[1].trim();
+                        content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                    } else if (textSoFar.includes('<think>')) {
+                        // Partial think tag
+                        thinking = textSoFar.split('<think>')[1].trim();
+                        content = textSoFar.split('<think>')[0].trim();
+                    }
+
+                    setMessages(prev => prev.map(m => m.id === assistantId ? {
+                        ...m,
+                        content: content,
+                        thinking: thinking
+                    } : m));
+                },
+                modelTier
+            );
+
+            // Export full analysis
+            const fullAnalysis = exportAnalysis(analysis, response.data);
+            fullAnalysis.aiResponse = aiResponse.replace('[CRO_AUDIT_COMPLETE]', '').trim();
+            fullAnalysis.metadata = generateReportMetadata(analysis);
+
+            setCroAnalysis(fullAnalysis);
+
+            setMessages([{
+                role: 'assistant',
+                content: aiResponse.replace('[CRO_AUDIT_COMPLETE]', '').trim() + '\n\n✅ **CRO Audit Complete!** Scroll up to view the detailed report.',
+                id: assistantId
+            }]);
+
+        } catch (err) {
+            console.error('CRO Analysis Error:', err);
+            setCroError('CRO analysis failed: ' + (err.message || 'Unknown error'));
+            setMessages([{
+                role: 'assistant',
+                content: '❌ CRO analysis failed: ' + (err.message || 'Unknown error'),
+                id: Date.now() + '-cro-err'
+            }]);
+        } finally {
+            setCroLoading(false);
+        }
+    }, [apiKey, modelTier]);
+
     const startMode = useCallback((newMode, initialMsg = '') => {
         setMode(newMode);
-        setMessages([]);
         setSpec('');
         setError('');
-        setIntelligenceReport(null); // Clear intelligence when starting new mode
+        setIntelligenceReport(null);
+        setCroAnalysis(null);
+        setCroError('');
 
-        // If there's an initial message, send it immediately with empty history context
+        // Special handling for Intelligence Mode
+        if (newMode === 'intelligence') {
+            setMessages([{
+                role: 'assistant',
+                content: '🕵️ **Intelligence Mode Active**\n\nEnter a competitor website URL (e.g., `kashmirbox.com`) to generate a deep strategic report.',
+                id: Date.now().toString()
+            }]);
+            return;
+        }
+
+        // Special handling for CRO Mode
+        if (newMode === 'cro') {
+            setMessages([{
+                role: 'assistant',
+                content: '🚀 **Starting CRO Audit...**\n\nConnecting to page...',
+                id: Date.now().toString()
+            }]);
+            return;
+        }
+
+        setMessages([]);
+        if (newMode === 'page' && initialMsg) {
+            // Logic for page analysis handled via startMode('page', context) from App.jsx
+            // startMode('page', context) calls this. 
+            // We want to treat 'initialMsg' as the USER message that contains the context.
+            sendMessage(initialMsg, newMode, []);
+            return;
+        }
+
+        // If there's an initial message (e.g., "Roast my stack"), send it
         if (initialMsg) {
             sendMessage(initialMsg, newMode, []);
+        } else {
+            setMessages([]); // Ensure empty if no message
         }
     }, [sendMessage]);
 
@@ -245,6 +552,11 @@ Analyze this data and provide a competitive intelligence report.`;
         searchQuery, setSearchQuery,
         showBookmarksOnly, setShowBookmarksOnly,
         toggleBookmark,
-        modelTier, setModelTier
+        modelTier, setModelTier,
+        intelligenceReport, setIntelligenceReport,
+        croAnalysis, setCroAnalysis,
+        croLoading, setCroLoading,
+        croError, setCroError,
+        runCROAnalysis
     };
 }

@@ -6,7 +6,7 @@ import { DEFAULT_API_KEY, MODEL_TIERS } from './config';
 import { useGabriel } from './hooks/useGabriel';
 import { chatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
 import { analyzeWebsite } from './utils/intelligence';
-import { IntelligenceReport, LoadingReport } from './components/IntelligenceReport';
+import CROReport from './components/CROReport';
 
 // Configure marked for clean output
 marked.setOptions({
@@ -102,6 +102,32 @@ function MermaidBlock({ code }) {
   );
 }
 
+// Thinking Block Component
+function ThinkingBlock({ content }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!content) return null;
+
+  return (
+    <div className="thinking-block">
+      <div
+        className="thinking-header"
+        onClick={() => setExpanded(!expanded)}
+        title="Toggle reasoning"
+      >
+        <span className="thinking-icon">🧠</span>
+        <span className="thinking-label">Reasoning Process</span>
+        <span className={`thinking-chevron ${expanded ? 'expanded' : ''}`}>▼</span>
+      </div>
+      {expanded && (
+        <div className="thinking-content">
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const {
     mode, setMode,
@@ -123,7 +149,10 @@ export default function App() {
     modelTier, setModelTier,
     intelligenceReport, setIntelligenceReport,
     intelligenceLoading,
-    runIntelligence
+    runIntelligence,
+    croAnalysis,
+    croLoading,
+    runCROAnalysis
   } = useGabriel();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -131,18 +160,10 @@ export default function App() {
   const [pageLoading, setPageLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-  const spyInputRef = useRef(null);
   const [copiedMsgId, setCopiedMsgId] = useState(null);
-  const [spyUrl, setSpyUrl] = useState('');
   const copyMessage = (text, id) => {
     navigator.clipboard.writeText(text);
     setTimeout(() => setCopiedMsgId(null), 2000);
-  };
-
-  const handleSpy = async () => {
-    if (!spyUrl.trim()) return;
-    await runIntelligence(spyUrl.trim());
-    setSpyUrl('');
   };
 
   const openSidePanel = async () => {
@@ -188,7 +209,10 @@ export default function App() {
     };
 
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      // FIX: Use lastFocusedWindow instead of currentWindow to ensure we get the user's active tab,
+      // not the extension popup/sidepanel itself
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+
       if (!tab?.id) { setError('No active tab found.'); setPageLoading(false); return; }
       if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('about:')) {
         setError('Cannot read browser internal pages.');
@@ -315,6 +339,11 @@ export default function App() {
 
   const msgCount = messages.filter(m => m.role === 'user').length;
 
+  // Handle follow-up questions for CRO report
+  const handleCROQuestion = (question) => {
+    sendMessage(`About the CRO audit: ${question}`);
+  };
+
   const MODE_LABELS = {
     architect: 'Architect',
     cto: 'Brutal CTO',
@@ -323,7 +352,8 @@ export default function App() {
     diagram: '📊 Diagram',
     analyze: '🔍 Analyze',
     intelligence: '🕵️ Intelligence',
-    page: 'Page Analysis'
+    page: 'Page Analysis',
+    cro: '🎯 CRO Audit'
   };
 
   return (
@@ -469,7 +499,7 @@ export default function App() {
                 <span className="card-emoji">🏗️</span>
                 <span className="card-text">Design System</span>
               </button>
-              <button className="quick-card" onClick={() => startMode('roast')}>
+              <button className="quick-card" onClick={() => startMode('roast', 'Roast my tech stack')}>
                 <span className="card-emoji">🔥</span>
                 <span className="card-text">Roast My Stack</span>
               </button>
@@ -477,62 +507,46 @@ export default function App() {
                 <span className="card-emoji">🤬</span>
                 <span className="card-text">Brutal Interview</span>
               </button>
-              <button className="quick-card" onClick={() => startMode('compare')}>
+              <button className="quick-card" onClick={() => startMode('compare', 'I need to compare two technologies')}>
                 <span className="card-emoji">⚖️</span>
                 <span className="card-text">Compare Tech</span>
               </button>
-              <button className="quick-card" onClick={() => startMode('diagram')}>
+              <button className="quick-card" onClick={() => startMode('diagram', 'I want to generate a diagram')}>
                 <span className="card-emoji">📊</span>
                 <span className="card-text">Generate Diagram</span>
               </button>
-              <button className="quick-card" onClick={() => startMode('analyze')}>
+              <button className="quick-card" onClick={() => startMode('analyze', 'I want to analyze a GitHub repository')}>
                 <span className="card-emoji">🔍</span>
                 <span className="card-text">Analyze Repo</span>
               </button>
-              <button className="quick-card" onClick={() => startMode('intelligence')}>
+              <button className="quick-card" onClick={() => startMode('intelligence', 'I want to analyze a competitor website')}>
                 <span className="card-emoji">🕵️</span>
                 <span className="card-text">Site Intel</span>
+              </button>
+              <button className="quick-card" onClick={() => { startMode('cro'); runCROAnalysis(); }}>
+                <span className="card-emoji">🎯</span>
+                <span className="card-text">CRO Audit</span>
               </button>
               <button className="quick-card" onClick={() => startMode('architect', "I have an idea but I don't know where to start")}>
                 <span className="card-emoji">💡</span>
                 <span className="card-text">I Have an Idea</span>
               </button>
-              <button className="quick-card" onClick={() => {
-                spyInputRef.current?.focus();
-                spyInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              }}>
-                <span className="card-emoji">🌐</span>
-                <span className="card-text">Search Brand</span>
-              </button>
-            </div>
-
-            {/* Spy Mode Input */}
-            <div className="spy-input-container">
-              <div className="spy-label">🕵️ Competitive Intelligence</div>
-              <div className="input-group">
-                <input
-                  ref={spyInputRef}
-                  className="spy-input"
-                  placeholder="Enter competitor URL (e.g. apple.com)..."
-                  value={spyUrl}
-                  onChange={(e) => setSpyUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSpy()}
-                />
-                <button className="spy-btn" onClick={handleSpy}>Analyze</button>
-              </div>
             </div>
           </div>
         )}
 
-        {/* Intelligence Loading State */}
-        {intelligenceLoading && <LoadingReport />}
 
-        {/* Intelligence Report Display */}
-        {intelligenceReport && (
-          <IntelligenceReport
-            report={intelligenceReport}
-            onClose={() => setIntelligenceReport(null)}
-          />
+
+        {/* CRO Report */}
+        {croAnalysis && (
+          <div className="cro-report-container">
+            <CROReport
+              analysis={croAnalysis}
+              aiResponse={croAnalysis.aiResponse}
+              onAskQuestion={handleCROQuestion}
+              isLoading={croLoading}
+            />
+          </div>
         )}
 
         {/* Messages */}
@@ -545,6 +559,9 @@ export default function App() {
             )}
 
             <div className="message-bubble">
+              {/* Thinking / Reasoning Display */}
+              {msg.thinking && <ThinkingBlock content={msg.thinking} />}
+
               <MessageContent text={msg.content} />
 
               {/* Message Actions */}
@@ -594,7 +611,12 @@ export default function App() {
           <textarea
             ref={inputRef}
             className="input-field"
-            placeholder={messages.length === 0 ? "What are we building today?" : "Type a message..."}
+            placeholder={
+              messages.length === 0 ? "What are we building today?" :
+                mode === 'intelligence' ? "Enter competitor URL (e.g. apple.com)..." :
+                  mode === 'analyze' ? "Enter GitHub Repo URL..." :
+                    "Type a message..."
+            }
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
