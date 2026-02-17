@@ -1,16 +1,39 @@
-# React + Vite
+# Gabriel — AI Architecture Spec Generator 🏗️
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+![Gabriel Banner](https://raw.githubusercontent.com/ayaan77/gabriel/main/public/icon-128.png) <!-- Placeholder if no banner, using icon -->
 
-Currently, two official plugins are available:
+Hey there! 👋
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+This is **Gabriel**, a Chrome Extension I built to help me (and you!) speed run the initial phase of software architecture. 
 
-## React Compiler
+It's basically a **system design interview in a chat box**, but instead of judging you, it helps you build a rock-solid implementation plan and generates a professional PDF spec you can hand off to developers (or AI agents).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Why I built this
+I was tired of copy-pasting context into ChatGPT every time I started a new project. I wanted something that lives *in the browser*, can see what I'm looking at, and helps me structure my thoughts into actual deliverables.
 
-## Expanding the ESLint configuration
+## Technologies
+Powered by **Groq** (because who has time to wait only to see a model typing? Fast inference is life ⚡️). 
+- React + Vite (Fast, light)
+- Chrome Extension API (Side Panel, Scripting, Offscreen Audio)
+- jsPDF (for that sweet PDF export)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Features that actually matter
+
+- **⚡️ Streaming AI**: No waiting. It feels like talking to a real person.
+- **📄 Read Page Context**: One click and Gabriel reads the page you're on. Great for "How do I implement this library?" questions.
+- **🗣️ Voice Input**: Sometimes you just want to ramble. Gabriel listens.
+- **📑 PDF Export**: Turns your chat into a structured `implementation_plan.md` style PDF. 
+- **🌗 Side Panel Mode**: Keeps Gabriel open next to your docs so you don't lose focus.
+
+## How to run it locally
+
+1. Clone this repo.
+2. Run `npm install` then `npm run build`.
+3. Open Chrome and go to `chrome://extensions`.
+4. Enable "Developer mode" (top right).
+5. Click "Load unpacked" and select the `dist` folder.
+6. Pin it and start building!
+
+---
+
+*Built with ❤️ and a lot of caffeine. Open source, hackable, and ready for your ideas.*

@@ -1,7 +1,8 @@
 {
   "name": "gabriel",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.2.2",
+  "description": "Your AI architect for rapid system design and spec generation.",
   "type": "module",
   "scripts": {
     "dev": "vite",
