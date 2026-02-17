@@ -4,6 +4,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { DEFAULT_API_KEY, MODEL_TIERS } from './config';
 import { useGabriel } from './hooks/useGabriel';
+import { chatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
+import { analyzeWebsite } from './utils/intelligence';
 import { IntelligenceReport, LoadingReport } from './components/IntelligenceReport';
 
 // Configure marked for clean output
@@ -317,9 +319,10 @@ export default function App() {
     architect: 'Architect',
     cto: 'Brutal CTO',
     roast: 'Roast',
-    compare: 'Compare',
-    diagram: 'Diagram',
-    analyze: 'Analyze',
+    compare: '⚖️ Compare',
+    diagram: '📊 Diagram',
+    analyze: '🔍 Analyze',
+    intelligence: '🕵️ Intelligence',
     page: 'Page Analysis'
   };
 
@@ -485,6 +488,10 @@ export default function App() {
               <button className="quick-card" onClick={() => startMode('analyze')}>
                 <span className="card-emoji">🔍</span>
                 <span className="card-text">Analyze Repo</span>
+              </button>
+              <button className="quick-card" onClick={() => startMode('intelligence')}>
+                <span className="card-emoji">🕵️</span>
+                <span className="card-text">Site Intel</span>
               </button>
               <button className="quick-card" onClick={() => startMode('architect', "I have an idea but I don't know where to start")}>
                 <span className="card-emoji">💡</span>

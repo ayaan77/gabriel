@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { chatWithAI, streamChatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from '../utils/ai';
-import { analyzeCompetitor } from '../utils/intelligence';
+import { analyzeWebsite } from '../utils/intelligence';
 import { DEFAULT_API_KEY } from '../config';
 
 export function useGabriel() {
@@ -15,8 +15,6 @@ export function useGabriel() {
     const [generatingSpec, setGeneratingSpec] = useState(false);
     const [analyzing, setAnalyzing] = useState(false);
     const [modelTier, setModelTier] = useState('high');
-    const [intelligenceReport, setIntelligenceReport] = useState(null);
-    const [intelligenceLoading, setIntelligenceLoading] = useState(false);
 
     // Search & Bookmark State
     const [searchQuery, setSearchQuery] = useState('');
@@ -105,7 +103,6 @@ export function useGabriel() {
             bookmarked: false
         };
 
-        // Use override history if provided (e.g. from startMode), else current state
         const currentHistory = historyOverride || messages;
         const updated = [...currentHistory, userMsg];
 
@@ -115,15 +112,11 @@ export function useGabriel() {
         setError('');
 
         try {
-            // Analyze Mode logic
+            // 1. Analyze Repo Mode
             const ghMatch = text.match(/github\.com\/[^\/]+\/[^\/\s]+/);
             if (currentMode === 'analyze' && ghMatch) {
                 setMessages([...updated, { role: 'assistant', content: '🔍 Fetching repository structure from GitHub...', id: Date.now() + '-load' }]);
                 const repoData = await fetchGitHubRepo(text.trim());
-
-                // Remove loader, add ready msg
-                // Actually streamChatWithAI usually handles appending.
-                // But here we are doing custom flow.
 
                 setMessages(prev => [...prev.filter(m => !m.id?.includes('-load')), { role: 'assistant', content: '📂 Got the repo! Analyzing architecture...', id: Date.now() + '-got' }]);
 
@@ -137,11 +130,45 @@ export function useGabriel() {
                 return;
             }
 
-            // Normal Mode logic
+            // Define Assistant Message for Stream
             const assistantId = Date.now() + 1 + '';
             const assistantMsg = { role: 'assistant', content: '', id: assistantId, bookmarked: false };
             setMessages([...updated, assistantMsg]);
 
+            // 2. Intelligence Mode
+            if (currentMode === 'intelligence') {
+                let targetUrl = text.trim();
+                // Basic URL fix
+                if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
+
+                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: '🕵️ Scanning target website for tech stack & ads...' } : m));
+
+                try {
+                    const data = await analyzeWebsite(targetUrl);
+
+                    const IntelContext = `TARGET ANALYSIS DATA:
+Domain: ${data.domain}
+Tech Stack Detected: ${JSON.stringify(data.stack, null, 2)}
+Meta Ads Library: ${data.metaAdsUrl}
+Google Ads Transparency: ${data.googleAdsUrl}
+Traffic Estimate: ${data.estimatedTraffic}
+
+Analyze this data and provide a competitive intelligence report.`;
+
+                    const finalIntel = await streamChatWithAI([{ role: 'user', content: IntelContext }], apiKey, 'intelligence', (textSoFar) => {
+                        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
+                    }, modelTier);
+
+                    const cleaned = finalIntel.replace('[INTELLIGENCE_COMPLETE]', '').trim();
+                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned } : m));
+
+                } catch (err) {
+                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: '❌ Analysis failed. ' + err.message } : m));
+                }
+                return;
+            }
+
+            // 3. Normal Chat Mode
             const finalText = await streamChatWithAI(updated, apiKey, currentMode, (textSoFar) => {
                 setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
             }, modelTier);
@@ -173,7 +200,7 @@ export function useGabriel() {
             else if (errorMsg.includes('429')) setError('Rate limit exceeded. Try again later.');
             else setError('Error: ' + errorMsg);
 
-            setMessages(prev => [...prev, { role: 'assistant', content: '❌ Error: ' + errorMsg, id: Date.now() + '-err' }]);
+            setMessages(prev => [...prev.filter(m => m.id !== (Date.now() + 1 + '')), { role: 'assistant', content: '❌ Error: ' + errorMsg, id: Date.now() + '-err' }]);
         } finally {
             setLoading(false);
         }
@@ -192,26 +219,6 @@ export function useGabriel() {
         }
     }, [sendMessage]);
 
-    const runIntelligence = useCallback(async (url) => {
-        if (!apiKey || apiKey.trim() === '') {
-            setError('No API key found. Click ⚙️ Settings to enter your Groq key.');
-            return;
-        }
-
-        setIntelligenceLoading(true);
-        setError('');
-        setIntelligenceReport(null);
-
-        try {
-            const report = await analyzeCompetitor(url, apiKey, modelTier);
-            setIntelligenceReport(report);
-        } catch (err) {
-            console.error('Intelligence error:', err);
-            setError('Intelligence gathering failed: ' + (err.message || 'Unknown error'));
-        } finally {
-            setIntelligenceLoading(false);
-        }
-    }, [apiKey, modelTier]);
 
     // Derived state for filtering
     const filteredMessages = messages.filter(m => {
@@ -238,9 +245,6 @@ export function useGabriel() {
         searchQuery, setSearchQuery,
         showBookmarksOnly, setShowBookmarksOnly,
         toggleBookmark,
-        modelTier, setModelTier,
-        intelligenceReport, setIntelligenceReport,
-        intelligenceLoading,
-        runIntelligence
+        modelTier, setModelTier
     };
 }
