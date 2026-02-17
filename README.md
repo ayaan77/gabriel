@@ -22,8 +22,15 @@ Powered by **Groq** (because who has time to wait only to see a model typing? Fa
 - **⚡️ Streaming AI**: No waiting. It feels like talking to a real person.
 - **📄 Read Page Context**: One click and Gabriel reads the page you're on. Great for "How do I implement this library?" questions.
 - **🗣️ Voice Input**: Sometimes you just want to ramble. Gabriel listens.
-- **📑 PDF Export**: Turns your chat into a structured `implementation_plan.md` style PDF. 
+- **📑 PDF & Markdown Export**: Turns your chat into a structured `implementation_plan.md` style PDF. 
 - **🌗 Side Panel Mode**: Keeps Gabriel open next to your docs so you don't lose focus.
+- **🧠 Multi-Model Tiers**: Choose between **High Intelligence** (Llama 3 70b) for complex tasks or **Efficient** models for speed.
+- **🕵️ Competitive Intelligence (Spy Mode)**: 
+    - Auto-detects tech stack (Shopify, React, etc.)
+    - Estimates traffic & conversion signals
+    - Direct link to Active Meta Ads
+    - Generates deep strategic insights using a "Lead Analyst" persona
+- **🌐 Search Brand**: Instantly research any competitor brand right from the start screen.
 
 ## How to run it locally
 

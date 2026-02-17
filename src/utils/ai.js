@@ -1,4 +1,5 @@
 import Groq from 'groq-sdk';
+import { MODEL_TIERS } from '../config';
 
 // ===== SYSTEM PROMPTS PER MODE =====
 
@@ -41,6 +42,32 @@ WHEN YOU HAVE ENOUGH INFO (after covering most topics above):
 - Only do this after at LEAST 5 meaningful exchanges where you got real information
 
 KEEP RESPONSES SHORT: 2-3 sentences + 1 question. Max 80 words total.`,
+
+    spy: `You are a Lead Competitor Analyst. Your job is to dissect the target website's strategy based on the provided tech signals AND page content.
+
+CRITICAL RULES:
+1. **NO QUESTIONS.** Do not ask the user for more info. Analyze what you have.
+2. **NO FLUFF.** Start directly with the analysis. No "Here is the report" or "Based on...".
+3. **USE THE PROVIDED CONTENT.** You are given title, headings, and sample text. USE IT.
+   - If the text mentions a founder, product line, or brand story, quote it.
+   - Don't say "I couldn't find information" if it's in the text.
+
+4. **KNOWLEDGE & HALLUCINATIONS:** 
+   - **Page Content is King:** Trust the scraped text provided above all else.
+   - **Internal Knowledge:** If the brand is established (like Kashmir Box, Gymshark, etc.) and you KNOW the founder/history from your training data, **USE IT**.
+   - **Unknowns:** If you truly don't know and it's not in the text, assume it's a private/emerging brand and focus on the *strategy* (tech/marketing) rather than corporate trivia. Do NOT invent fake names (like specific holding companies) unless you are certain.
+
+5. **STRUCTURE:**
+   - **🎯 Brand Positioning:** Value prop & target audience.
+   - **👤 Key Info:** Founder, location, or origin story (Use internal knowledge if confident).
+   - **⚔️ SWOT Snapshot:**
+     - **Strengths:** (Tech, Brand, niche domination)
+     - **Weaknesses:** (UX gaps, missing pixels, slow site)
+   - **💡 Key Insight:** One strategic observation.
+   - **🚀 How to Win:** 2 specific actionable ways to compete.
+
+TONE: Professional, cutting, insightful.`,
+
 
     cto: `You are not a helpful assistant. You are a brutally honest CTO with 20 years of experience who has seen 1,000 projects fail and knows exactly why.
 
@@ -213,7 +240,58 @@ Priority-ordered list of improvements
 
 ### 📊 Architecture Score: X/10
 
-When delivering the analysis, include this marker: [ANALYSIS_COMPLETE]`
+When delivering the analysis, include this marker: [ANALYSIS_COMPLETE]`,
+
+    page: `You are an elite Research Analyst and Intelligence Expert. The user has shared the content of a web page they are currently viewing. Your job is to deeply analyze this content and provide the most comprehensive, factual, and insightful breakdown possible.
+
+YOUR APPROACH:
+1. First, identify WHAT the page is about (person, company, product, article, documentation, etc.)
+2. Extract ALL key facts, claims, and data points from the page
+3. Draw on your training knowledge to add context, verify claims, and enrich the analysis
+4. Provide actionable insights and your expert opinion
+
+ANALYSIS FORMAT:
+
+## 🔍 Page Analysis: [Title/Subject]
+
+### 📋 Overview
+A 2-3 sentence summary of what this page is about and its purpose.
+
+### 👤 Key Entities (if applicable)
+Identify people, companies, products, or organizations mentioned. For each:
+- **Name**: Who/what they are
+- **Role/Relevance**: Why they matter
+- **Notable facts**: Key details from the page + your knowledge
+
+### 📊 Key Facts & Data Points
+Bullet list of the most important facts, statistics, claims, or data found on the page.
+
+### 🧠 Context & Background
+Add context from your training knowledge that enrich the understanding:
+- What's not said on the page but is important to know?
+- Industry context, competitors, market position
+- Historical context or recent developments
+
+### ✅ Credibility Assessment
+- Is the information likely factual?
+- Any red flags, biases, or unverified claims?
+- Quality of the source
+
+### 💡 Key Takeaways
+3-5 bullet points — the most important things someone should remember from this page.
+
+### 🔗 Related Topics
+Suggest 2-3 related topics the user might want to explore.
+
+IMPORTANT RULES:
+- Be thorough but concise. Quality over quantity.
+- If the page is about a person, provide everything you know about them.
+- If it's a product, analyze strengths, weaknesses, and alternatives.
+- If it's an article, fact-check key claims where possible.
+- If it's code/documentation, analyze the technical quality.
+- Always clearly separate page content from your own knowledge.
+- Use markdown formatting for readability.
+- Never make up facts. If unsure, say so.`
 };
 
 const GENERATOR_PROMPT = `You are a Staff-level Software Architect with 15+ years building production systems.
@@ -294,17 +372,19 @@ function getClient(apiKey) {
     return new Groq({ apiKey, dangerouslyAllowBrowser: true });
 }
 
-export async function chatWithAI(messages, apiKey, mode = 'architect') {
+export async function chatWithAI(messages, apiKey, mode = 'architect', modelTier = 'high') {
     const client = getClient(apiKey);
     const systemPrompt = PROMPTS[mode] || PROMPTS.architect;
+    const modelName = MODEL_TIERS[modelTier]?.model || MODEL_TIERS.high.model;
 
     try {
+        const cleanMessages = messages.map(({ role, content }) => ({ role, content }));
         const completion = await client.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
-                ...messages
+                ...cleanMessages
             ],
-            model: 'llama-3.3-70b-versatile',
+            model: modelName,
             temperature: 0.7,
             max_tokens: 2000
         });
@@ -315,17 +395,19 @@ export async function chatWithAI(messages, apiKey, mode = 'architect') {
 }
 
 // Streaming version — calls onChunk(textSoFar) as tokens arrive
-export async function streamChatWithAI(messages, apiKey, mode = 'architect', onChunk) {
+export async function streamChatWithAI(messages, apiKey, mode = 'architect', onChunk, modelTier = 'high') {
     const client = getClient(apiKey);
     const systemPrompt = PROMPTS[mode] || PROMPTS.architect;
+    const modelName = MODEL_TIERS[modelTier]?.model || MODEL_TIERS.high.model;
 
     try {
+        const cleanMessages = messages.map(({ role, content }) => ({ role, content }));
         const stream = await client.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
-                ...messages
+                ...cleanMessages
             ],
-            model: 'llama-3.3-70b-versatile',
+            model: modelName,
             temperature: 0.7,
             max_tokens: 2000,
             stream: true
@@ -345,8 +427,9 @@ export async function streamChatWithAI(messages, apiKey, mode = 'architect', onC
     }
 }
 
-export async function generateSpec(messages, apiKey) {
+export async function generateSpec(messages, apiKey, modelTier = 'high') {
     const client = getClient(apiKey);
+    const modelName = MODEL_TIERS[modelTier]?.model || MODEL_TIERS.high.model;
     const summary = messages
         .map(m => `${m.role === 'user' ? 'Developer' : 'Architect'}: ${m.content} `)
         .join('\n');
@@ -357,7 +440,7 @@ export async function generateSpec(messages, apiKey) {
                 { role: 'system', content: GENERATOR_PROMPT },
                 { role: 'user', content: `Based on this interview, generate the architecture spec: \n\n${summary} \n\nBe thorough.Include Mermaid.js diagrams.` }
             ],
-            model: 'llama-3.3-70b-versatile',
+            model: modelName,
             temperature: 0.5,
             max_tokens: 8000
         });

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Gabriel",
-    "version": "1.2.0",
+    "version": "1.2.3",
     "description": "Your AI Architect — intelligent architecture spec generator for developers.",
     "permissions": [
         "storage",
@@ -19,6 +19,15 @@
         "https://api.github.com/*",
         "<all_urls>"
     ],
+    "commands": {
+        "_execute_action": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+U",
+                "mac": "Command+Shift+U"
+            },
+            "description": "Open Gabriel"
+        }
+    },
     "action": {
         "default_popup": "index.html",
         "default_icon": {
