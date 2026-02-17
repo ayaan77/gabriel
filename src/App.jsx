@@ -389,6 +389,7 @@ export default function App() {
 
   const MODE_LABELS = {
     architect: '🏗️ Architect',
+    cto: '🤬 Brutal CTO',
     roast: '🔥 Roast',
     compare: '⚖️ Compare',
     diagram: '📊 Diagram',
@@ -457,6 +458,10 @@ export default function App() {
               <button className="quick-card" onClick={() => startMode('architect', 'I want to build a new project')}>
                 <span className="card-emoji">🏗️</span>
                 <span className="card-text">Design Architecture</span>
+              </button>
+              <button className="quick-card" onClick={() => startMode('cto', 'I am ready for a brutal interview')}>
+                <span className="card-emoji">🤬</span>
+                <span className="card-text">Brutal CTO Interview</span>
               </button>
               <button className="quick-card" onClick={() => startMode('roast')}>
                 <span className="card-emoji">🔥</span>
