@@ -1,132 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
 import jsPDF from 'jspdf';
 import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { DEFAULT_API_KEY, MODEL_TIERS } from './config';
 import { useGabriel } from './hooks/useGabriel';
-import { chatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from './utils/ai';
+import { isCouncilAvailable } from './utils/council';
 import { analyzeWebsite } from './utils/intelligence';
 import CROReport from './components/CROReport';
+
+// Extracted components
+import { Icons } from './components/Icons';
+import { MessageContent, ThinkingBlock } from './components/MessageContent';
+import { CouncilPanel } from './components/CouncilPanel';
+import { SettingsModal } from './components/SettingsModal';
+import { HomeView } from './components/HomeView';
 
 // Configure marked for clean output
 marked.setOptions({
   breaks: true,
   gfm: true,
 });
-
-// Inline SVG icons
-const Icons = {
-  Wand: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 4-1 1 4 4 1-1a2.83 2.83 0 1 0-4-4Z" /><path d="m13 6-8.5 8.5a2.12 2.12 0 1 0 3 3L16 9" /></svg>,
-  Send: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>,
-  Settings: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>,
-  Download: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>,
-  Markdown: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="14 9 9 4 4 9" /><path d="M20 20h-7" /><path d="M9 14V4" /><path d="M20 20H4" /></svg>,
-  Sun: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2" /><path d="M12 21v2" /><path d="M4.22 4.22l1.42 1.42" /><path d="M18.36 18.36l1.42 1.42" /><path d="M1 12h2" /><path d="M21 12h2" /><path d="M4.22 19.78l1.42-1.42" /><path d="M18.36 5.64l1.42-1.42" /></svg>,
-  Moon: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>,
-  Plus: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>,
-  AlertCircle: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>,
-  Loader: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>,
-  Refresh: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></svg>,
-  Code: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>,
-  Copy: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>,
-  Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>,
-  Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
-  Page: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></svg>,
-  Layout: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><line x1="15" x2="15" y1="3" y2="21" /></svg>,
-  Search: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>,
-  Star: ({ filled }) => <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: filled ? '#F59E0B' : 'inherit' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>,
-  Filter: ({ active }) => <svg width="18" height="18" viewBox="0 0 24 24" fill={active ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? '#F59E0B' : 'inherit' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>,
-  User: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-};
-
-// Render Markdown content with mermaid block support
-function MessageContent({ text }) {
-  // Extract mermaid blocks first, replace with placeholders
-  const mermaidBlocks = [];
-  const textWithPlaceholders = text.replace(/```mermaid\n([\s\S]*?)```/g, (match, code) => {
-    const idx = mermaidBlocks.length;
-    mermaidBlocks.push(code.trim());
-    return `<!--MERMAID_PLACEHOLDER_${idx}-->`;
-  });
-
-  // Parse markdown to HTML
-  const rawHtml = marked.parse(textWithPlaceholders);
-  const cleanHtml = DOMPurify.sanitize(rawHtml, {
-    ADD_TAGS: ['iframe'],
-    ADD_ATTR: ['target', 'rel'],
-  });
-
-  // If no mermaid blocks, render directly
-  if (mermaidBlocks.length === 0) {
-    return <div className="message-text" dangerouslySetInnerHTML={{ __html: cleanHtml }} />;
-  }
-
-  // Split by mermaid placeholders and interleave
-  const parts = [];
-  const segments = cleanHtml.split(/<!--MERMAID_PLACEHOLDER_(\d+)-->/);
-  for (let i = 0; i < segments.length; i++) {
-    if (i % 2 === 0) {
-      // HTML segment
-      if (segments[i].trim()) {
-        parts.push(<div key={`html-${i}`} dangerouslySetInnerHTML={{ __html: segments[i] }} />);
-      }
-    } else {
-      // Mermaid block index
-      const idx = parseInt(segments[i], 10);
-      parts.push(<MermaidBlock key={`mermaid-${idx}`} code={mermaidBlocks[idx]} />);
-    }
-  }
-
-  return <div className="message-text">{parts}</div>;
-}
-
-function MermaidBlock({ code }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText('```mermaid\n' + code + '\n```');
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="mermaid-block">
-      <div className="mermaid-header">
-        <span>📊 Mermaid Diagram</span>
-        <button className="copy-btn" onClick={copy} title="Copy diagram code">
-          {copied ? <><Icons.Check /> Copied!</> : <><Icons.Copy /> Copy</>}
-        </button>
-      </div>
-      <pre className="mermaid-code">{code}</pre>
-      <div className="mermaid-hint">Paste into mermaid.live or any Markdown editor to render</div>
-    </div>
-  );
-}
-
-// Thinking Block Component
-function ThinkingBlock({ content }) {
-  const [expanded, setExpanded] = useState(false);
-
-  if (!content) return null;
-
-  return (
-    <div className="thinking-block">
-      <div
-        className="thinking-header"
-        onClick={() => setExpanded(!expanded)}
-        title="Toggle reasoning"
-      >
-        <span className="thinking-icon">🧠</span>
-        <span className="thinking-label">Reasoning Process</span>
-        <span className={`thinking-chevron ${expanded ? 'expanded' : ''}`}>▼</span>
-      </div>
-      {expanded && (
-        <div className="thinking-content">
-          {content}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function App() {
   const {
@@ -152,7 +44,9 @@ export default function App() {
     runIntelligence,
     croAnalysis,
     croLoading,
-    runCROAnalysis
+    runCROAnalysis,
+    councilEnabled, setCouncilEnabled,
+    councilResults
   } = useGabriel();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -163,6 +57,7 @@ export default function App() {
   const [copiedMsgId, setCopiedMsgId] = useState(null);
   const copyMessage = (text, id) => {
     navigator.clipboard.writeText(text);
+    setCopiedMsgId(id);
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
@@ -173,7 +68,6 @@ export default function App() {
         await chrome.sidePanel.open({ windowId });
         window.close();
       } else {
-        // Fallback for Arc and browsers without sidePanel API
         await chrome.windows.create({
           url: chrome.runtime.getURL('index.html'),
           type: 'popup',
@@ -183,7 +77,6 @@ export default function App() {
         window.close();
       }
     } catch (e) {
-      // Final fallback — open as a tab
       try {
         await chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
         window.close();
@@ -198,7 +91,6 @@ export default function App() {
     setPageLoading(true);
     setError('');
 
-    // Timeout wrapper - prevents hanging when content script doesn't respond
     const sendWithTimeout = (tabId, message, ms = 3000) => {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => resolve(null), ms);
@@ -209,8 +101,6 @@ export default function App() {
     };
 
     try {
-      // FIX: Use lastFocusedWindow instead of currentWindow to ensure we get the user's active tab,
-      // not the extension popup/sidepanel itself
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
 
       if (!tab?.id) { setError('No active tab found.'); setPageLoading(false); return; }
@@ -220,7 +110,6 @@ export default function App() {
         return;
       }
 
-      // Always inject content script first (idempotent - listener deduplication handled in content.js)
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
@@ -233,7 +122,6 @@ export default function App() {
 
       let context = '';
 
-      // Try enhanced extraction first (with timeout)
       try {
         const response = await sendWithTimeout(tab.id, { action: 'get_page_data' });
         if (response?.success && (response.text || response.mainContent)) {
@@ -276,7 +164,6 @@ export default function App() {
         console.warn('Enhanced extraction failed:', e);
       }
 
-      // Fallback to basic text extraction (with timeout)
       if (!context) {
         try {
           const response = await sendWithTimeout(tab.id, { action: 'get_visible_text' });
@@ -294,7 +181,6 @@ export default function App() {
         return;
       }
 
-      // Use startMode to clear state and send the page context
       startMode('page', context);
     } catch (err) {
       console.error('Read page error:', err);
@@ -308,19 +194,10 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  const saveApiKey = () => {
-    if (!apiKey.startsWith('gsk_')) return setError('Invalid key');
-    try { chrome?.storage?.local?.set({ groqApiKey: apiKey }); } catch { }
-    setShowSettings(false); setError('');
-  };
-
   const downloadPDF = () => {
-    // ... existing PDF logic (same as before, purely functional)
     const content = spec || messages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n');
     if (!content) return;
     const pdf = new jsPDF('p', 'mm', 'a4');
-    // ... basic PDF generation code ...
-    // Simplified for this overwrite, keeping core logic
     const lines = pdf.splitTextToSize(content, 180);
     pdf.text(lines, 10, 10);
     pdf.save('gabriel-spec.pdf');
@@ -339,7 +216,6 @@ export default function App() {
 
   const msgCount = messages.filter(m => m.role === 'user').length;
 
-  // Handle follow-up questions for CRO report
   const handleCROQuestion = (question) => {
     sendMessage(`About the CRO audit: ${question}`);
   };
@@ -360,45 +236,16 @@ export default function App() {
     <div className="app-container">
 
       {/* Settings Modal */}
-      {showSettings && (
-        <div className="settings-overlay" onClick={(e) => {
-          if (e.target.className === 'settings-overlay') setShowSettings(false);
-        }}>
-          <div className="settings-panel">
-            <h3 className="settings-title">Preferences</h3>
-
-            <div className="setting-item">
-              <span className="setting-label">Theme</span>
-              <button className="header-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-                {theme === 'dark' ? <Icons.Moon /> : <Icons.Sun />}
-              </button>
-            </div>
-
-            <div style={{ marginTop: 16 }}>
-              <span className="setting-label">Groq API Key</span>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                className="input-field"
-                style={{ background: 'var(--bg-card)', borderRadius: 8, marginTop: 8, border: '1px solid var(--border-color)' }}
-                placeholder="gsk_..."
-              />
-            </div>
-
-            <div className="settings-actions">
-              <button className="btn btn-ghost" onClick={() => setShowSettings(false)}>Cancel</button>
-              <button className="btn btn-next" onClick={saveApiKey}>Save</button>
-            </div>
-
-            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--border-color)' }}>
-              <button className="btn-outline-danger" style={{ width: '100%', justifyContent: 'center' }} onClick={clearHistory}>
-                <Icons.Trash /> Clear Conversation
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsModal
+        showSettings={showSettings}
+        setShowSettings={setShowSettings}
+        theme={theme}
+        setTheme={setTheme}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        setError={setError}
+        clearHistory={clearHistory}
+      />
 
       {/* Glass Header */}
       <header className="header">
@@ -447,7 +294,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Model Tier Selector — below header */}
+      {/* Model Tier Selector */}
       <div className="model-tier-bar">
         <div className="model-tier-selector">
           {Object.values(MODEL_TIERS).map(tier => (
@@ -465,7 +312,24 @@ export default function App() {
         <span className="model-indicator">{MODEL_TIERS[modelTier]?.description}</span>
       </div>
 
-      {/* Main Content Scrollable Area */}
+      {/* Council Toggle */}
+      {isCouncilAvailable(mode) && (
+        <div className="council-toggle-bar">
+          <button
+            className={`council-toggle-btn ${councilEnabled ? 'active' : ''}`}
+            onClick={() => setCouncilEnabled(!councilEnabled)}
+            title={councilEnabled ? 'Council Mode ON — querying all models' : 'Council Mode OFF — single model'}
+          >
+            <span>🏛️</span>
+            <span>{councilEnabled ? 'Council ON' : 'Council OFF'}</span>
+          </button>
+          {councilEnabled && (
+            <span className="council-hint">3 models will debate & synthesize</span>
+          )}
+        </div>
+      )}
+
+      {/* Main Content */}
       <main className="main-content">
 
         {showSearch && (
@@ -485,57 +349,8 @@ export default function App() {
 
         {/* Home View */}
         {messages.length === 0 && !spec && (
-          <div className="home-view">
-            <div className="hero-icon">
-              <Icons.Wand />
-            </div>
-            <h1 className="hero-title">Gabriel AI</h1>
-            <p className="hero-description">
-              Your intelligent architectural companion. Roast stacks, design systems, or prepare for brutal interviews.
-            </p>
-
-            <div className="cards-grid">
-              <button className="quick-card" onClick={() => startMode('architect', 'I want to build a new project')}>
-                <span className="card-emoji">🏗️</span>
-                <span className="card-text">Design System</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('roast', 'Roast my tech stack')}>
-                <span className="card-emoji">🔥</span>
-                <span className="card-text">Roast My Stack</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('cto', 'I am ready for a brutal interview')}>
-                <span className="card-emoji">🤬</span>
-                <span className="card-text">Brutal Interview</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('compare', 'I need to compare two technologies')}>
-                <span className="card-emoji">⚖️</span>
-                <span className="card-text">Compare Tech</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('diagram', 'I want to generate a diagram')}>
-                <span className="card-emoji">📊</span>
-                <span className="card-text">Generate Diagram</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('analyze', 'I want to analyze a GitHub repository')}>
-                <span className="card-emoji">🔍</span>
-                <span className="card-text">Analyze Repo</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('intelligence', 'I want to analyze a competitor website')}>
-                <span className="card-emoji">🕵️</span>
-                <span className="card-text">Site Intel</span>
-              </button>
-              <button className="quick-card" onClick={() => { startMode('cro'); runCROAnalysis(); }}>
-                <span className="card-emoji">🎯</span>
-                <span className="card-text">CRO Audit</span>
-              </button>
-              <button className="quick-card" onClick={() => startMode('architect', "I have an idea but I don't know where to start")}>
-                <span className="card-emoji">💡</span>
-                <span className="card-text">I Have an Idea</span>
-              </button>
-            </div>
-          </div>
+          <HomeView startMode={startMode} runCROAnalysis={runCROAnalysis} />
         )}
-
-
 
         {/* CRO Report */}
         {croAnalysis && (
@@ -559,12 +374,14 @@ export default function App() {
             )}
 
             <div className="message-bubble">
-              {/* Thinking / Reasoning Display */}
               {msg.thinking && <ThinkingBlock content={msg.thinking} />}
 
               <MessageContent text={msg.content} />
 
-              {/* Message Actions */}
+              {msg.isCouncilResult && councilResults && (
+                <CouncilPanel results={councilResults} onClose={() => { }} />
+              )}
+
               <div className="msg-actions">
                 <button
                   className="msg-action-btn"

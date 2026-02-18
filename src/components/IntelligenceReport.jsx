@@ -11,7 +11,10 @@ export function IntelligenceReport({ report, onClose }) {
     if (!report) return null;
 
     const { domain, techStack, traffic, conversionSignals, aiAnalysis, timestamp, fromCache } = report;
-    const aiHtml = DOMPurify.sanitize(marked.parse(aiAnalysis));
+    const aiHtml = DOMPurify.sanitize(marked.parse(aiAnalysis), {
+        FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
+    });
 
     return (
         <div className="intelligence-report fade-in">

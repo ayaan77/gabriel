@@ -1,9 +1,10 @@
 /* global chrome */
 import { useState, useEffect, useCallback } from 'react';
-import { chatWithAI, streamChatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext } from '../utils/ai';
+import { chatWithAI, streamChatWithAI, generateSpec, fetchGitHubRepo, buildRepoContext, PROMPTS } from '../utils/ai';
 import { analyzeWebsite } from '../utils/intelligence';
 import { DEFAULT_API_KEY } from '../config';
 import { analyzePage, buildAIContext, exportAnalysis, generateReportMetadata } from '../utils/croAnalyzer';
+import { runCouncil, isCouncilAvailable } from '../utils/council';
 
 export function useGabriel() {
     const [mode, setMode] = useState('architect');
@@ -17,6 +18,10 @@ export function useGabriel() {
     const [generatingSpec, setGeneratingSpec] = useState(false);
     const [modelTier, setModelTier] = useState('high');
     const [intelligenceReport, setIntelligenceReport] = useState(null);
+
+    // Council State
+    const [councilEnabled, setCouncilEnabled] = useState(false);
+    const [councilResults, setCouncilResults] = useState(null);
 
     // CRO Analysis State
     const [croAnalysis, setCroAnalysis] = useState(null);
@@ -40,7 +45,7 @@ export function useGabriel() {
     useEffect(() => {
         try {
             if (chrome?.storage?.local) {
-                chrome.storage.local.get(['groqApiKey', 'gabrielHistory', 'gabrielMode', 'theme', 'gabrielModelTier'], (r) => {
+                chrome.storage.local.get(['groqApiKey', 'gabrielHistory', 'gabrielMode', 'theme', 'gabrielModelTier', 'councilEnabled'], (r) => {
                     if (r?.groqApiKey) setApiKey(r.groqApiKey);
                     else setApiKey(DEFAULT_API_KEY);
 
@@ -48,6 +53,7 @@ export function useGabriel() {
                     if (r?.gabrielMode) setMode(r.gabrielMode);
                     if (r?.theme) setTheme(r.theme);
                     if (r?.gabrielModelTier) setModelTier(r.gabrielModelTier);
+                    if (r?.councilEnabled !== undefined) setCouncilEnabled(r.councilEnabled);
                 });
             } else { setApiKey(DEFAULT_API_KEY); }
         } catch { setApiKey(DEFAULT_API_KEY); }
@@ -57,9 +63,9 @@ export function useGabriel() {
     useEffect(() => {
         if (chrome?.storage?.local) {
             if (messages.length > 0) chrome.storage.local.set({ gabrielHistory: messages, gabrielMode: mode });
-            chrome.storage.local.set({ theme, gabrielModelTier: modelTier });
+            chrome.storage.local.set({ theme, gabrielModelTier: modelTier, councilEnabled });
         }
-    }, [messages, mode, theme, modelTier]);
+    }, [messages, mode, theme, modelTier, councilEnabled]);
 
     // Apply theme
     useEffect(() => {
@@ -117,6 +123,7 @@ export function useGabriel() {
         setInput('');
         setLoading(true);
         setError('');
+        setCouncilResults(null);
 
         try {
             // 1. Analyze Repo Mode
@@ -124,16 +131,29 @@ export function useGabriel() {
             if (currentMode === 'analyze' && ghMatch) {
                 setMessages([...updated, { role: 'assistant', content: '🔍 Fetching repository structure from GitHub...', id: Date.now() + '-load' }]);
                 const repoData = await fetchGitHubRepo(text.trim());
+                const repoContext = buildRepoContext(repoData);
 
                 setMessages(prev => [...prev.filter(m => !m.id?.includes('-load')), { role: 'assistant', content: '📂 Got the repo! Analyzing architecture...', id: Date.now() + '-got' }]);
 
-                const response = await chatWithAI([{ role: 'user', content: buildRepoContext(repoData) }], apiKey, 'analyze', modelTier);
-                const cleaned = response.replace('[ANALYSIS_COMPLETE]', '').trim();
-
-                setMessages(prev => [
-                    ...prev.filter(m => !m.id?.includes('-got')),
-                    { role: 'assistant', content: cleaned, id: Date.now().toString() }
-                ]);
+                if (councilEnabled) {
+                    const systemPrompt = PROMPTS['analyze'] || PROMPTS.architect;
+                    const councilData = await runCouncil(repoContext, systemPrompt, apiKey, (progressMsg) => {
+                        setMessages(prev => prev.map(m => m.id?.includes('-got') ? { ...m, content: progressMsg } : m));
+                    });
+                    setCouncilResults(councilData);
+                    const cleaned = (councilData.stage3.content || '').replace('[ANALYSIS_COMPLETE]', '').trim();
+                    setMessages(prev => [
+                        ...prev.filter(m => !m.id?.includes('-got')),
+                        { role: 'assistant', content: cleaned, id: Date.now().toString(), isCouncilResult: true }
+                    ]);
+                } else {
+                    const response = await chatWithAI([{ role: 'user', content: repoContext }], apiKey, 'analyze', modelTier);
+                    const cleaned = response.replace('[ANALYSIS_COMPLETE]', '').trim();
+                    setMessages(prev => [
+                        ...prev.filter(m => !m.id?.includes('-got')),
+                        { role: 'assistant', content: cleaned, id: Date.now().toString() }
+                    ]);
+                }
                 return;
             }
 
@@ -142,10 +162,8 @@ export function useGabriel() {
             const assistantMsg = { role: 'assistant', content: '', id: assistantId, bookmarked: false };
             setMessages([...updated, assistantMsg]);
 
-            // 2. Intelligence Mode
             if (currentMode === 'intelligence') {
                 let targetUrl = text.trim();
-                // Basic URL fix
                 if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
 
                 setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: '🕵️ Scanning target website for tech stack & ads...' } : m));
@@ -172,12 +190,21 @@ Traffic Estimate: ${data.estimatedTraffic}
 
 Analyze this data and provide a competitive intelligence report. Focus on the PAGE CONTENT to understand their brand positioning and proposition.`;
 
-                    const finalIntel = await streamChatWithAI([{ role: 'user', content: IntelContext }], apiKey, 'intelligence', (textSoFar) => {
-                        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
-                    }, modelTier);
-
-                    const cleaned = finalIntel.replace('[INTELLIGENCE_COMPLETE]', '').trim();
-                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned } : m));
+                    if (councilEnabled) {
+                        const systemPrompt = PROMPTS['intelligence'] || PROMPTS.architect;
+                        const councilData = await runCouncil(IntelContext, systemPrompt, apiKey, (progressMsg) => {
+                            setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: progressMsg } : m));
+                        });
+                        setCouncilResults(councilData);
+                        const cleaned = (councilData.stage3.content || '').replace('[INTELLIGENCE_COMPLETE]', '').trim();
+                        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned, isCouncilResult: true } : m));
+                    } else {
+                        const finalIntel = await streamChatWithAI([{ role: 'user', content: IntelContext }], apiKey, 'intelligence', (textSoFar) => {
+                            setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: textSoFar } : m));
+                        }, modelTier);
+                        const cleaned = finalIntel.replace('[INTELLIGENCE_COMPLETE]', '').trim();
+                        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned } : m));
+                    }
 
                 } catch (err) {
                     setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: '❌ Analysis failed. ' + err.message } : m));
@@ -185,47 +212,74 @@ Analyze this data and provide a competitive intelligence report. Focus on the PA
                 return;
             }
 
-            // 3. Normal Chat Mode
-            const finalText = await streamChatWithAI(updated, apiKey, currentMode, (textSoFar) => {
-                // Check for thinking tags
-                let content = textSoFar;
-                let thinking = '';
+            // 3. Council Mode — multi-model ensemble
+            if (councilEnabled && isCouncilAvailable(currentMode)) {
+                const systemPrompt = PROMPTS[currentMode] || PROMPTS.architect;
+                const userQuery = text.trim();
 
-                const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
-                if (thinkMatch) {
-                    thinking = thinkMatch[1].trim();
-                    content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
-                } else if (textSoFar.includes('<think>')) {
-                    // Partial think tag
-                    thinking = textSoFar.split('<think>')[1].trim();
-                    content = textSoFar.split('<think>')[0].trim();
-                }
+                const councilData = await runCouncil(userQuery, systemPrompt, apiKey, (progressMsg) => {
+                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: progressMsg } : m));
+                });
+
+                setCouncilResults(councilData);
+
+                // Display chairman's final synthesis
+                const finalContent = councilData.stage3.content || 'No synthesis generated.';
+                const cleaned = finalContent
+                    .replace('[READY_TO_GENERATE]', '')
+                    .replace('[ROAST_COMPLETE]', '')
+                    .replace('[COMPARE_COMPLETE]', '')
+                    .replace('[ANALYSIS_COMPLETE]', '')
+                    .trim();
 
                 setMessages(prev => prev.map(m => m.id === assistantId ? {
                     ...m,
-                    content: content,
-                    thinking: thinking
+                    content: cleaned,
+                    isCouncilResult: true
                 } : m));
-            }, modelTier);
 
-            // Handle Completion Markers
-            if (finalText.includes('[READY_TO_GENERATE]')) {
-                const clean = finalText.replace('[READY_TO_GENERATE]', '').trim();
-                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: clean + '\n\n⚡ Generating your architecture spec...' } : m));
-
-                setGeneratingSpec(true);
-                const fullSpec = await generateSpec(updated, apiKey, modelTier);
-                setSpec(fullSpec);
-                setMessages(prev => [...prev, { role: 'assistant', content: '✅ Architecture spec is ready! Scroll down to review or export as PDF.', id: Date.now() + '-spec' }]);
-                setGeneratingSpec(false);
+                // 4. Normal Single-Model Chat Mode
             } else {
-                const cleaned = finalText
-                    .replace('[ROAST_COMPLETE]', '')
-                    .replace('[COMPARE_COMPLETE]', '')
-                    .replace('[DIAGRAM_COMPLETE]', '')
-                    .replace('[ANALYSIS_COMPLETE]', '')
-                    .trim();
-                setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned } : m));
+                const finalText = await streamChatWithAI(updated, apiKey, currentMode, (textSoFar) => {
+                    // Check for thinking tags
+                    let content = textSoFar;
+                    let thinking = '';
+
+                    const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
+                    if (thinkMatch) {
+                        thinking = thinkMatch[1].trim();
+                        content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                    } else if (textSoFar.includes('<think>')) {
+                        thinking = textSoFar.split('<think>')[1].trim();
+                        content = textSoFar.split('<think>')[0].trim();
+                    }
+
+                    setMessages(prev => prev.map(m => m.id === assistantId ? {
+                        ...m,
+                        content: content,
+                        thinking: thinking
+                    } : m));
+                }, modelTier);
+
+                // Handle Completion Markers
+                if (finalText.includes('[READY_TO_GENERATE]')) {
+                    const clean = finalText.replace('[READY_TO_GENERATE]', '').trim();
+                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: clean + '\n\n⚡ Generating your architecture spec...' } : m));
+
+                    setGeneratingSpec(true);
+                    const fullSpec = await generateSpec(updated, apiKey, modelTier);
+                    setSpec(fullSpec);
+                    setMessages(prev => [...prev, { role: 'assistant', content: '✅ Architecture spec is ready! Scroll down to review or export as PDF.', id: Date.now() + '-spec' }]);
+                    setGeneratingSpec(false);
+                } else {
+                    const cleaned = finalText
+                        .replace('[ROAST_COMPLETE]', '')
+                        .replace('[COMPARE_COMPLETE]', '')
+                        .replace('[DIAGRAM_COMPLETE]', '')
+                        .replace('[ANALYSIS_COMPLETE]', '')
+                        .trim();
+                    setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: cleaned } : m));
+                }
             }
 
         } catch (err) {
@@ -239,7 +293,7 @@ Analyze this data and provide a competitive intelligence report. Focus on the PA
         } finally {
             setLoading(false);
         }
-    }, [apiKey, loading, messages, mode, modelTier]);
+    }, [apiKey, loading, messages, mode, modelTier, councilEnabled]);
 
     // CRO Analysis Function
     const runCROAnalysis = useCallback(async () => {
@@ -427,46 +481,60 @@ Analyze this data and provide a competitive intelligence report. Focus on the PA
                 id: assistantId
             }]);
 
-            const aiResponse = await streamChatWithAI(
-                [{ role: 'user', content: aiContext }],
-                apiKey,
-                'cro',
-                (textSoFar) => {
-                    // Check for thinking tags
-                    let content = textSoFar;
-                    let thinking = '';
+            let aiResponse;
+            if (councilEnabled) {
+                const systemPrompt = PROMPTS['cro'] || PROMPTS.architect;
+                const councilData = await runCouncil(aiContext, systemPrompt, apiKey, (progressMsg) => {
+                    setMessages([{ role: 'assistant', content: progressMsg, id: assistantId }]);
+                });
+                setCouncilResults(councilData);
+                aiResponse = (councilData.stage3.content || '').replace('[CRO_AUDIT_COMPLETE]', '').trim();
+                setMessages([{
+                    role: 'assistant',
+                    content: aiResponse + '\n\n✅ **CRO Audit Complete!** Scroll up to view the detailed report.',
+                    id: assistantId,
+                    isCouncilResult: true
+                }]);
+            } else {
+                aiResponse = await streamChatWithAI(
+                    [{ role: 'user', content: aiContext }],
+                    apiKey,
+                    'cro',
+                    (textSoFar) => {
+                        let content = textSoFar;
+                        let thinking = '';
 
-                    const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
-                    if (thinkMatch) {
-                        thinking = thinkMatch[1].trim();
-                        content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
-                    } else if (textSoFar.includes('<think>')) {
-                        // Partial think tag
-                        thinking = textSoFar.split('<think>')[1].trim();
-                        content = textSoFar.split('<think>')[0].trim();
-                    }
+                        const thinkMatch = textSoFar.match(/<think>([\s\S]*?)<\/think>/);
+                        if (thinkMatch) {
+                            thinking = thinkMatch[1].trim();
+                            content = textSoFar.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+                        } else if (textSoFar.includes('<think>')) {
+                            thinking = textSoFar.split('<think>')[1].trim();
+                            content = textSoFar.split('<think>')[0].trim();
+                        }
 
-                    setMessages(prev => prev.map(m => m.id === assistantId ? {
-                        ...m,
-                        content: content,
-                        thinking: thinking
-                    } : m));
-                },
-                modelTier
-            );
+                        setMessages(prev => prev.map(m => m.id === assistantId ? {
+                            ...m,
+                            content: content,
+                            thinking: thinking
+                        } : m));
+                    },
+                    modelTier
+                );
+                aiResponse = aiResponse.replace('[CRO_AUDIT_COMPLETE]', '').trim();
 
-            // Export full analysis
+                setMessages([{
+                    role: 'assistant',
+                    content: aiResponse + '\n\n✅ **CRO Audit Complete!** Scroll up to view the detailed report.',
+                    id: assistantId
+                }]);
+            }
+
+            // Export full analysis (shared between council and single-model paths)
             const fullAnalysis = exportAnalysis(analysis, response.data);
-            fullAnalysis.aiResponse = aiResponse.replace('[CRO_AUDIT_COMPLETE]', '').trim();
+            fullAnalysis.aiResponse = aiResponse;
             fullAnalysis.metadata = generateReportMetadata(analysis);
-
             setCroAnalysis(fullAnalysis);
-
-            setMessages([{
-                role: 'assistant',
-                content: aiResponse.replace('[CRO_AUDIT_COMPLETE]', '').trim() + '\n\n✅ **CRO Audit Complete!** Scroll up to view the detailed report.',
-                id: assistantId
-            }]);
 
         } catch (err) {
             console.error('CRO Analysis Error:', err);
@@ -479,7 +547,7 @@ Analyze this data and provide a competitive intelligence report. Focus on the PA
         } finally {
             setCroLoading(false);
         }
-    }, [apiKey, modelTier]);
+    }, [apiKey, modelTier, councilEnabled]);
 
     const startMode = useCallback((newMode, initialMsg = '') => {
         setMode(newMode);
@@ -557,6 +625,8 @@ Analyze this data and provide a competitive intelligence report. Focus on the PA
         croAnalysis, setCroAnalysis,
         croLoading, setCroLoading,
         croError, setCroError,
-        runCROAnalysis
+        runCROAnalysis,
+        councilEnabled, setCouncilEnabled,
+        councilResults, setCouncilResults
     };
 }
