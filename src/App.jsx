@@ -1,16 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import jsPDF from 'jspdf';
 import { marked } from 'marked';
-import { DEFAULT_API_KEY, MODEL_TIERS } from './config';
 import { useGabriel } from './hooks/useGabriel';
-import { isCouncilAvailable } from './utils/council';
-import { analyzeWebsite } from './utils/intelligence';
 import CROReport from './components/CROReport';
 
 // Extracted components
 import { Icons } from './components/Icons';
-import { MessageContent, ThinkingBlock } from './components/MessageContent';
-import { CouncilPanel } from './components/CouncilPanel';
+import { ChatHeader } from './components/ChatHeader';
+import { MessageList } from './components/MessageList';
 import { SettingsModal } from './components/SettingsModal';
 import { HomeView } from './components/HomeView';
 
@@ -20,6 +17,12 @@ marked.setOptions({
   gfm: true,
 });
 
+/**
+ * App — root component for the Gabriel Chrome extension.
+ *
+ * Orchestrates all UI sections (header, messages, input footer) and
+ * delegates state management to the `useGabriel` hook.
+ */
 export default function App() {
   const {
     mode, setMode,
@@ -55,12 +58,15 @@ export default function App() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const [copiedMsgId, setCopiedMsgId] = useState(null);
+
+  /** Copies a message to clipboard and shows a brief checkmark. */
   const copyMessage = (text, id) => {
     navigator.clipboard.writeText(text);
     setCopiedMsgId(id);
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  /** Opens the extension as a Chrome side panel, falling back to a popup window. */
   const openSidePanel = async () => {
     try {
       if (chrome.sidePanel?.open) {
@@ -86,6 +92,10 @@ export default function App() {
     }
   };
 
+  /**
+   * Reads the active tab's page content and sends it to the AI for analysis.
+   * Injects the content script if needed, with a 3-second timeout fallback.
+   */
   const readPage = async () => {
     if (pageLoading) return;
     setPageLoading(true);
@@ -111,10 +121,7 @@ export default function App() {
       }
 
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js']
-        });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
       } catch (injectErr) {
         console.warn('Script injection note:', injectErr);
       }
@@ -129,36 +136,25 @@ export default function App() {
           context = `📄 **Analyze this page:**\n\n`;
           context += `**Title:** ${title || 'Unknown'}\n`;
           context += `**URL:** ${url || 'Unknown'}\n`;
-
           if (meta?.description) context += `**Description:** ${meta.description}\n`;
           if (meta?.author) context += `**Author:** ${meta.author}\n`;
           if (meta?.siteName) context += `**Site:** ${meta.siteName}\n`;
           if (meta?.ogType) context += `**Type:** ${meta.ogType}\n`;
           if (meta?.keywords) context += `**Keywords:** ${meta.keywords}\n`;
-
-          if (headings && headings.length > 0) {
+          if (headings?.length > 0) {
             context += `\n**Page Structure:**\n`;
             headings.slice(0, 15).forEach(h => {
               const indent = h.level === 'H1' ? '' : h.level === 'H2' ? '  ' : '    ';
               context += `${indent}${h.level}: ${h.text}\n`;
             });
           }
-
           const contentBody = mainContent || text;
-          if (contentBody) {
-            context += `\n**Page Content:**\n${contentBody.substring(0, 6000)}\n`;
-          }
-
-          if (links && links.length > 0) {
+          if (contentBody) context += `\n**Page Content:**\n${contentBody.substring(0, 6000)}\n`;
+          if (links?.length > 0) {
             context += `\n**Key Links Found:**\n`;
-            links.slice(0, 10).forEach(l => {
-              context += `- [${l.text}](${l.href})\n`;
-            });
+            links.slice(0, 10).forEach(l => { context += `- [${l.text}](${l.href})\n`; });
           }
-
-          if (meta?.structuredData) {
-            context += `\n**Structured Data:** ${meta.structuredData.substring(0, 500)}\n`;
-          }
+          if (meta?.structuredData) context += `\n**Structured Data:** ${meta.structuredData.substring(0, 500)}\n`;
         }
       } catch (e) {
         console.warn('Enhanced extraction failed:', e);
@@ -194,6 +190,7 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  /** Downloads the current conversation or spec as a PDF file. */
   const downloadPDF = () => {
     const content = spec || messages.filter(m => m.role === 'assistant').map(m => m.content).join('\n\n---\n\n');
     if (!content) return;
@@ -203,6 +200,7 @@ export default function App() {
     pdf.save('gabriel-spec.pdf');
   };
 
+  /** Downloads the current conversation or spec as a Markdown file. */
   const downloadMD = () => {
     const content = spec || messages.map(m => `### ${m.role === 'assistant' ? '🤖 Gabriel' : '👤 You'}\n\n${m.content}`).join('\n\n---\n\n');
     if (!content) return;
@@ -214,22 +212,8 @@ export default function App() {
     a.click();
   };
 
-  const msgCount = messages.filter(m => m.role === 'user').length;
-
   const handleCROQuestion = (question) => {
     sendMessage(`About the CRO audit: ${question}`);
-  };
-
-  const MODE_LABELS = {
-    architect: 'Architect',
-    cto: 'Brutal CTO',
-    roast: 'Roast',
-    compare: '⚖️ Compare',
-    diagram: '📊 Diagram',
-    analyze: '🔍 Analyze',
-    intelligence: '🕵️ Intelligence',
-    page: 'Page Analysis',
-    cro: '🎯 CRO Audit'
   };
 
   return (
@@ -247,87 +231,25 @@ export default function App() {
         clearHistory={clearHistory}
       />
 
-      {/* Glass Header */}
-      <header className="header">
-        <div className="header-left">
-          <div className="header-logo">
-            <Icons.Wand />
-          </div>
-          <div>
-            <div className="header-title">Gabriel</div>
-            <div className="header-subtitle">
-              <span className="status-dot"></span>
-              {messages.length > 0 ? MODE_LABELS[mode] : 'Online'}
-            </div>
-          </div>
-        </div>
-
-        <div className="header-actions">
-          {messages.length > 0 && (
-            <>
-              <button className={`header-btn ${showBookmarksOnly ? 'active' : ''}`} onClick={() => setShowBookmarksOnly(!showBookmarksOnly)} title="Bookmarks">
-                <Icons.Star filled={showBookmarksOnly} />
-              </button>
-              <button className={`header-btn ${showSearch ? 'active' : ''}`} onClick={() => { setShowSearch(!showSearch); if (showSearch) setSearchQuery(''); }} title="Search">
-                <Icons.Search />
-              </button>
-            </>
-          )}
-
-          <button className="header-btn" onClick={openSidePanel} title="Side Panel">
-            <Icons.Layout />
-          </button>
-
-          {(spec || messages.length > 2) && (
-            <button className="header-btn" onClick={downloadMD} title="Export">
-              <Icons.Download />
-            </button>
-          )}
-
-          <button className="header-btn" onClick={startNew} title="New Chat">
-            <Icons.Refresh />
-          </button>
-
-          <button className="header-btn" onClick={() => setShowSettings(true)} title="Settings">
-            <Icons.Settings />
-          </button>
-        </div>
-      </header>
-
-      {/* Model Tier Selector */}
-      <div className="model-tier-bar">
-        <div className="model-tier-selector">
-          {Object.values(MODEL_TIERS).map(tier => (
-            <button
-              key={tier.id}
-              className={`tier-btn ${modelTier === tier.id ? 'active' : ''}`}
-              onClick={() => setModelTier(tier.id)}
-              title={tier.description}
-            >
-              <span className="tier-emoji">{tier.emoji}</span>
-              <span className="tier-label">{tier.shortName}</span>
-            </button>
-          ))}
-        </div>
-        <span className="model-indicator">{MODEL_TIERS[modelTier]?.description}</span>
-      </div>
-
-      {/* Council Toggle */}
-      {isCouncilAvailable(mode) && (
-        <div className="council-toggle-bar">
-          <button
-            className={`council-toggle-btn ${councilEnabled ? 'active' : ''}`}
-            onClick={() => setCouncilEnabled(!councilEnabled)}
-            title={councilEnabled ? 'Council Mode ON — querying all models' : 'Council Mode OFF — single model'}
-          >
-            <span>🏛️</span>
-            <span>{councilEnabled ? 'Council ON' : 'Council OFF'}</span>
-          </button>
-          {councilEnabled && (
-            <span className="council-hint">3 models will debate & synthesize</span>
-          )}
-        </div>
-      )}
+      {/* Header + Model Tier + Council Toggle */}
+      <ChatHeader
+        mode={mode}
+        messageCount={messages.length}
+        hasSpec={!!spec}
+        modelTier={modelTier}
+        setModelTier={setModelTier}
+        councilEnabled={councilEnabled}
+        setCouncilEnabled={setCouncilEnabled}
+        showSearch={showSearch}
+        setShowSearch={setShowSearch}
+        setSearchQuery={setSearchQuery}
+        showBookmarksOnly={showBookmarksOnly}
+        setShowBookmarksOnly={setShowBookmarksOnly}
+        setShowSettings={setShowSettings}
+        startNew={startNew}
+        openSidePanel={openSidePanel}
+        downloadMD={downloadMD}
+      />
 
       {/* Main Content */}
       <main className="main-content">
@@ -364,60 +286,15 @@ export default function App() {
           </div>
         )}
 
-        {/* Messages */}
-        {filteredMessages.map((msg, i) => (
-          <div key={msg.id || i} className={`message ${msg.role}`}>
-            {msg.role === 'assistant' && (
-              <div className="message-avatar">
-                <Icons.Wand />
-              </div>
-            )}
-
-            <div className="message-bubble">
-              {msg.thinking && <ThinkingBlock content={msg.thinking} />}
-
-              <MessageContent text={msg.content} />
-
-              {msg.isCouncilResult && councilResults && (
-                <CouncilPanel results={councilResults} onClose={() => { }} />
-              )}
-
-              <div className="msg-actions">
-                <button
-                  className="msg-action-btn"
-                  onClick={() => toggleBookmark(msg.id)}
-                  title={msg.bookmarked ? "Unbookmark" : "Bookmark"}
-                >
-                  <Icons.Star filled={msg.bookmarked} />
-                </button>
-                <button
-                  className="msg-action-btn"
-                  onClick={() => copyMessage(msg.content, i)}
-                  title="Copy"
-                >
-                  {copiedMsgId === i ? <Icons.Check /> : <Icons.Copy />}
-                </button>
-              </div>
-            </div>
-
-            {msg.role === 'user' && (
-              <div className="message-avatar" style={{ background: 'var(--text-primary)', border: 'none' }}>
-                <Icons.User />
-              </div>
-            )}
-          </div>
-        ))}
-
-        {loading && (
-          <div className="message assistant">
-            <div className="message-avatar"><Icons.Wand /></div>
-            <div className="message-bubble" style={{ display: 'flex', alignItems: 'center' }}>
-              <div className="typing-indicator">
-                <span></span><span></span><span></span>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Message Feed */}
+        <MessageList
+          messages={filteredMessages}
+          loading={loading}
+          copiedMsgId={copiedMsgId}
+          copyMessage={copyMessage}
+          toggleBookmark={toggleBookmark}
+          councilResults={councilResults}
+        />
 
         <div ref={messagesEndRef} style={{ height: 1 }} />
       </main>
@@ -468,7 +345,10 @@ export default function App() {
               disabled={!input.trim() || loading}
               onClick={() => sendMessage(input)}
             >
-              {loading ? <div className="spinner" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%' }} /> : <Icons.Send />}
+              {loading
+                ? <div className="spinner" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%' }} />
+                : <Icons.Send />
+              }
             </button>
           </div>
         </div>

@@ -6,6 +6,17 @@ import { DEFAULT_API_KEY } from '../config';
 import { analyzePage, buildAIContext, exportAnalysis, generateReportMetadata } from '../utils/croAnalyzer';
 import { runCouncil, isCouncilAvailable } from '../utils/council';
 
+/**
+ * useGabriel — central state and logic hook for the Gabriel Chrome extension.
+ *
+ * Manages all application state (messages, mode, API key, council, CRO, search/bookmarks)
+ * and exposes action functions consumed by App.jsx and its child components.
+ *
+ * Persists conversation history, theme, model tier, and council preference
+ * to `chrome.storage.local` automatically.
+ *
+ * @returns {object} State values and action functions
+ */
 export function useGabriel() {
     const [mode, setMode] = useState('architect');
     const [theme, setTheme] = useState('dark');
@@ -72,6 +83,10 @@ export function useGabriel() {
         document.documentElement.setAttribute('data-theme', theme);
     }, [theme]);
 
+    /**
+     * Clears the conversation history from state and chrome.storage.local.
+     * Also resets spec, error, and search state.
+     */
     const clearHistory = useCallback(() => {
         setMessages([]);
         setSpec('');
@@ -81,6 +96,10 @@ export function useGabriel() {
         }
     }, []);
 
+    /**
+     * Resets the entire conversation to a clean slate.
+     * Clears messages, spec, input, error, search, and resets mode to 'architect'.
+     */
     const startNew = useCallback(() => {
         setMessages([]);
         if (chrome?.storage?.local) chrome.storage.local.set({ gabrielHistory: [] });
@@ -94,12 +113,27 @@ export function useGabriel() {
         setShowBookmarksOnly(false);
     }, []);
 
+    /**
+     * Toggles the bookmarked state of a message.
+     * @param {string} id - The message ID to bookmark/unbookmark
+     */
     const toggleBookmark = useCallback((id) => {
         setMessages(prev => prev.map(m =>
             m.id === id ? { ...m, bookmarked: !m.bookmarked } : m
         ));
     }, []);
 
+    /**
+     * Sends a user message and streams the AI response.
+     *
+     * Handles all modes: architect, analyze (GitHub), intelligence (competitor URL),
+     * roast, cto, compare, diagram, page, and cro.
+     * When council mode is enabled, routes through the 3-stage council pipeline.
+     *
+     * @param {string} text - The user's message text
+     * @param {string|null} overrideMode - Force a specific mode for this message
+     * @param {Array|null} historyOverride - Use a custom history instead of current messages
+     */
     const sendMessage = useCallback(async (text, overrideMode = null, historyOverride = null) => {
         if (!text.trim() || loading) return;
 
