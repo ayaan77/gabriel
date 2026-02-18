@@ -1,7 +1,14 @@
 // CRO Capture Module
 // Handles screenshot capture and CRO-specific element detection
 
-import html2canvas from 'html2canvas';
+/**
+ * Lazy-load html2canvas on first use (code-split into separate chunk)
+ * @returns {Promise<Function>} The html2canvas function
+ */
+async function getHtml2Canvas() {
+  const { default: html2canvas } = await import('html2canvas');
+  return html2canvas;
+}
 
 /**
  * Capture viewport screenshot (above the fold)
@@ -9,6 +16,7 @@ import html2canvas from 'html2canvas';
  */
 export async function captureViewportScreenshot() {
   try {
+    const html2canvas = await getHtml2Canvas();
     const canvas = await html2canvas(document.body, {
       x: window.scrollX,
       y: window.scrollY,
@@ -20,7 +28,7 @@ export async function captureViewportScreenshot() {
       logging: false,
       backgroundColor: null
     });
-    
+
     return canvas.toDataURL('image/jpeg', 0.8);
   } catch (error) {
     console.error('Viewport capture failed:', error);
@@ -43,14 +51,15 @@ export async function captureFullPageScreenshot() {
       document.body.scrollWidth,
       document.documentElement.scrollWidth
     );
-    
+
     // Store current scroll position
     const originalScroll = window.scrollY;
-    
+
     // Scroll to top first
     window.scrollTo(0, 0);
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
+    const html2canvas = await getHtml2Canvas();
     const canvas = await html2canvas(document.body, {
       x: 0,
       y: 0,
@@ -64,10 +73,10 @@ export async function captureFullPageScreenshot() {
       windowWidth: fullWidth,
       windowHeight: fullHeight
     });
-    
+
     // Restore scroll position
     window.scrollTo(0, originalScroll);
-    
+
     return canvas.toDataURL('image/jpeg', 0.7);
   } catch (error) {
     console.error('Full page capture failed:', error);
@@ -82,15 +91,15 @@ export async function captureFullPageScreenshot() {
 export async function captureHybridScreenshots() {
   // Start with viewport (fast)
   const viewportPromise = captureViewportScreenshot();
-  
+
   // Full page capture in parallel but slower
   const fullPagePromise = captureFullPageScreenshot();
-  
+
   const [viewport, fullPage] = await Promise.all([
     viewportPromise,
     fullPagePromise
   ]);
-  
+
   return {
     viewport,
     fullPage,
@@ -106,18 +115,18 @@ export function detectCROElements() {
   const elements = {
     // Primary CTA detection
     primaryCTA: detectPrimaryCTA(),
-    
+
     // All CTAs
     allCTAs: detectAllCTAs(),
-    
+
     // Forms
     forms: detectForms(),
-    
+
     // Hero section
     heroText: detectHeroText(),
     subheadline: detectSubheadline(),
     hasHeroImage: detectHeroImage(),
-    
+
     // Trust signals
     testimonials: detectTestimonials(),
     hasTestimonialsAboveFold: detectTestimonialsAboveFold(),
@@ -125,23 +134,23 @@ export function detectCROElements() {
     hasTrustBadges: detectTrustBadges(),
     hasSecurityBadges: detectSecurityBadges(),
     hasVisibleContact: detectVisibleContact(),
-    
+
     // Navigation
     navigationItems: detectNavigationItems(),
     hasStickyHeader: detectStickyHeader(),
-    
+
     // Content sections
     hasFAQ: detectFAQ(),
-    
+
     // Psychological triggers
     hasCountdownTimer: detectCountdownTimer(),
     hasAuthoritySignals: detectAuthoritySignals(),
-    
+
     // Special elements
     hasGuestCheckout: detectGuestCheckout(),
     pricingTables: detectPricingTables()
   };
-  
+
   return elements;
 }
 
@@ -151,11 +160,11 @@ function detectPrimaryCTA() {
   // Look for prominent buttons above the fold
   const viewportHeight = window.innerHeight;
   const buttons = Array.from(document.querySelectorAll('button, a[class*="btn"], a[class*="button"], [class*="cta"], [class*="primary"]'));
-  
+
   for (const btn of buttons) {
     const rect = btn.getBoundingClientRect();
     const style = window.getComputedStyle(btn);
-    
+
     // Check if visible and above fold
     if (rect.top < viewportHeight && rect.height > 30 && style.display !== 'none') {
       return {
@@ -167,7 +176,7 @@ function detectPrimaryCTA() {
       };
     }
   }
-  
+
   // Fallback: look for any prominent link
   const heroLinks = document.querySelectorAll('h1 + a, h2 + a, .hero a, [class*="hero"] a');
   if (heroLinks.length > 0) {
@@ -181,7 +190,7 @@ function detectPrimaryCTA() {
       position: { top: rect.top, left: rect.left }
     };
   }
-  
+
   return null;
 }
 
@@ -195,9 +204,9 @@ function detectAllCTAs() {
     '[class*="primary"]',
     '[class*="action"]'
   ];
-  
+
   const elements = document.querySelectorAll(ctaSelectors.join(', '));
-  
+
   elements.forEach((el, index) => {
     if (index < 10) { // Limit to first 10
       ctas.push({
@@ -207,21 +216,21 @@ function detectAllCTAs() {
       });
     }
   });
-  
+
   return ctas;
 }
 
 function detectForms() {
   const forms = [];
   const formElements = document.querySelectorAll('form');
-  
+
   formElements.forEach(form => {
     const inputs = form.querySelectorAll('input, select, textarea');
     const visibleInputs = Array.from(inputs).filter(input => {
       const style = window.getComputedStyle(input);
       return style.display !== 'none' && style.visibility !== 'hidden';
     });
-    
+
     forms.push({
       fieldCount: visibleInputs.length,
       hasLabels: visibleInputs.some(input => {
@@ -235,7 +244,7 @@ function detectForms() {
       action: form.action || null
     });
   });
-  
+
   return forms;
 }
 
@@ -244,7 +253,7 @@ function detectHeroText() {
   if (h1) {
     return h1.textContent?.trim()?.substring(0, 200) || '';
   }
-  
+
   // Try to find hero section text
   const heroSelectors = ['.hero', '[class*="hero"]', '[class*="banner"]', 'header'];
   for (const selector of heroSelectors) {
@@ -256,7 +265,7 @@ function detectHeroText() {
       }
     }
   }
-  
+
   return '';
 }
 
@@ -273,7 +282,7 @@ function detectSubheadline() {
       nextEl = nextEl.nextElementSibling;
     }
   }
-  
+
   // Look for subtitle classes
   const subSelectors = ['.subtitle', '[class*="subhead"]', '[class*="subtitle"]', 'h2'];
   for (const selector of subSelectors) {
@@ -285,21 +294,21 @@ function detectSubheadline() {
       }
     }
   }
-  
+
   return '';
 }
 
 function detectHeroImage() {
   const viewportHeight = window.innerHeight;
   const images = document.querySelectorAll('img, [class*="hero"] img, [class*="banner"] img');
-  
+
   for (const img of images) {
     const rect = img.getBoundingClientRect();
     if (rect.top < viewportHeight && rect.height > 100) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -310,16 +319,16 @@ function detectTestimonials() {
     '[class*="review"]',
     '[class*="quote"]'
   ];
-  
+
   const elements = document.querySelectorAll(testimonialSelectors.join(', '));
-  
+
   elements.forEach(el => {
     const text = el.textContent?.trim();
     if (text && text.length > 30) {
       testimonials.push(text.substring(0, 200));
     }
   });
-  
+
   return testimonials.slice(0, 5);
 }
 
@@ -330,16 +339,16 @@ function detectTestimonialsAboveFold() {
     '[class*="review"]',
     '[class*="social-proof"]'
   ];
-  
+
   const elements = document.querySelectorAll(testimonialSelectors.join(', '));
-  
+
   for (const el of elements) {
     const rect = el.getBoundingClientRect();
     if (rect.top < viewportHeight) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -349,7 +358,7 @@ function detectClientLogos() {
     '[class*="client"]',
     '[class*="partner"]'
   ];
-  
+
   const logoSection = document.querySelector(logoSelectors.join(', '));
   return logoSection !== null;
 }
@@ -357,7 +366,7 @@ function detectClientLogos() {
 function detectTrustBadges() {
   const badgeKeywords = ['secure', 'guarantee', 'verified', 'trusted', 'protected', 'ssl', ' Norton', 'McAfee'];
   const text = document.body.textContent?.toLowerCase() || '';
-  
+
   return badgeKeywords.some(keyword => text.includes(keyword.toLowerCase()));
 }
 
@@ -370,7 +379,7 @@ function detectSecurityBadges() {
     'img[alt*=" Norton" i]',
     'img[alt*="McAfee" i]'
   ];
-  
+
   return document.querySelector(securitySelectors.join(', ')) !== null;
 }
 
@@ -382,7 +391,7 @@ function detectVisibleContact() {
     '[class*="phone"]',
     '[class*="chat"]'
   ];
-  
+
   const contactEl = document.querySelector(contactSelectors.join(', '));
   return contactEl !== null;
 }
@@ -390,7 +399,7 @@ function detectVisibleContact() {
 function detectNavigationItems() {
   const nav = document.querySelector('nav, [class*="nav"], [class*="menu"]');
   if (!nav) return [];
-  
+
   const links = nav.querySelectorAll('a');
   return Array.from(links).map(a => a.textContent?.trim()).filter(Boolean);
 }
@@ -398,7 +407,7 @@ function detectNavigationItems() {
 function detectStickyHeader() {
   const header = document.querySelector('header, [class*="header"]');
   if (!header) return false;
-  
+
   const style = window.getComputedStyle(header);
   return style.position === 'fixed' || style.position === 'sticky';
 }
@@ -411,7 +420,7 @@ function detectFAQ() {
     'details',
     '[class*="accordion"]'
   ];
-  
+
   return document.querySelector(faqSelectors.join(', ')) !== null;
 }
 
@@ -421,14 +430,14 @@ function detectCountdownTimer() {
     '[class*="timer"]',
     '[class*="clock"]'
   ];
-  
+
   return document.querySelector(timerSelectors.join(', ')) !== null;
 }
 
 function detectAuthoritySignals() {
   const authorityKeywords = ['as seen on', 'featured in', 'award', 'certified', 'verified by'];
   const text = document.body.textContent?.toLowerCase() || '';
-  
+
   return authorityKeywords.some(keyword => text.includes(keyword));
 }
 
@@ -437,7 +446,7 @@ function detectGuestCheckout() {
   const checkoutText = document.body.textContent?.toLowerCase() || '';
   const hasCheckout = checkoutText.includes('checkout') || checkoutText.includes('cart');
   const hasGuest = checkoutText.includes('guest checkout') || checkoutText.includes('continue as guest');
-  
+
   if (!hasCheckout) return null; // Not an e-commerce site
   return hasGuest;
 }
@@ -448,7 +457,7 @@ function detectPricingTables() {
     '[class*="price"]',
     '[class*="plan"]'
   ];
-  
+
   const pricingElements = document.querySelectorAll(pricingSelectors.join(', '));
   return pricingElements.length;
 }
@@ -462,9 +471,9 @@ export async function getCROData() {
     captureHybridScreenshots(),
     getVisibleText()
   ]);
-  
+
   const croElements = detectCROElements();
-  
+
   return {
     screenshots,
     croElements,

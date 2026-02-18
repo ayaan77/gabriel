@@ -7,6 +7,7 @@ export default defineConfig({
   base: './',
   build: {
     outDir: 'dist',
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       input: {
         popup: 'index.html',
@@ -14,7 +15,14 @@ export default defineConfig({
       output: {
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name].[ext]'
+        assetFileNames: 'assets/[name].[ext]',
+        manualChunks: {
+          // Heavy AI/ML libraries — loaded lazily when needed
+          'transformers': ['@xenova/transformers'],
+          'html2canvas': ['html2canvas'],
+          // ONNX runtime — loaded by transformers
+          'onnx': ['onnxruntime-web'],
+        }
       }
     }
   },
